@@ -19,6 +19,7 @@ use ShoppingFeed\Manager\Model\Feed\Product\Attribute\Value\RendererPoolInterfac
 use ShoppingFeed\Manager\Model\Feed\Product\Section\AbstractAdapter;
 use ShoppingFeed\Manager\Model\Feed\Product\Section\Config\AttributesInterface as ConfigInterface;
 use ShoppingFeed\Manager\Model\Feed\Product\Section\Type\Attributes as Type;
+use ShoppingFeed\Manager\Model\Feed\Product\SkuExtractor;
 use ShoppingFeed\Manager\Model\Feed\RefreshableProduct;
 
 /**
@@ -48,6 +49,11 @@ class Attributes extends AbstractAdapter implements AttributesInterface
     private $frontendUrlBuilder;
 
     /**
+     * @var SkuExtractor
+     */
+    private $skuExtractor;
+
+    /**
      * @var AttributeSourceInterface
      */
     private $attributeSource;
@@ -67,6 +73,7 @@ class Attributes extends AbstractAdapter implements AttributesInterface
      * @param EavEntityTypeFactory $eavEntityTypeFactory
      * @param AttributeRendererPoolInterface $attributeRendererPool
      * @param UrlInterface $frontendUrlBuilder
+     * @param SkuExtractor $skuExtractor
      * @param AttributeSourceInterface $attributeSource
      */
     public function __construct(
@@ -74,10 +81,12 @@ class Attributes extends AbstractAdapter implements AttributesInterface
         EavEntityTypeFactory $eavEntityTypeFactory,
         AttributeRendererPoolInterface $attributeRendererPool,
         UrlInterface $frontendUrlBuilder,
+        SkuExtractor $skuExtractor,
         AttributeSourceInterface $attributeSource
     ) {
         $this->eavEntityTypeFactory = $eavEntityTypeFactory;
         $this->frontendUrlBuilder = $frontendUrlBuilder;
+        $this->skuExtractor = $skuExtractor;
         $this->attributeSource = $attributeSource;
         parent::__construct($storeManager, $attributeRendererPool);
     }
@@ -174,11 +183,9 @@ class Attributes extends AbstractAdapter implements AttributesInterface
     {
         $config = $this->getConfig();
         $catalogProduct = $product->getCatalogProduct();
-        $productId = (int) $catalogProduct->getId();
-        $productSku = $catalogProduct->getSku();
 
         $data = [
-            self::KEY_SKU => $config->shouldUseProductIdForSku($store) ? $productId : $productSku,
+            self::KEY_SKU => $this->skuExtractor->getCatalogProductSku($catalogProduct, $store),
             self::KEY_NAME => $catalogProduct->getName(),
             self::KEY_URL => $this->getCatalogProductFrontendUrl($store, $catalogProduct),
         ];

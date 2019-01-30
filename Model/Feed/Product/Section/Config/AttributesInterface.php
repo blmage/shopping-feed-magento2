@@ -11,6 +11,7 @@ interface AttributesInterface extends ConfigInterface
     /**
      * @param StoreInterface $store
      * @return bool
+     * @deprecated 1.0.0 Moved to the general configuration.
      */
     public function shouldUseProductIdForSku(StoreInterface $store);
 

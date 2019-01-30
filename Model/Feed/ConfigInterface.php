@@ -12,4 +12,10 @@ interface ConfigInterface extends BaseConfig
      * @return bool
      */
     public function shouldUseGzipCompression(StoreInterface $store);
+
+    /**
+     * @param StoreInterface $store
+     * @return bool
+     */
+    public function shouldUseProductIdForSku(StoreInterface $store);
 }

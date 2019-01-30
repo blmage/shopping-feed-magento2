@@ -15,6 +15,7 @@ use ShoppingFeed\Manager\Model\Feed\Product\Section\Config\Value\Handler\Attribu
 
 class Attributes extends AbstractConfig implements AttributesInterface
 {
+    /** @deprecated */
     const KEY_USE_PRODUCT_ID_FOR_SKU = 'use_product_id_for_sku';
     const KEY_BRAND_ATTRIBUTE = 'brand_attribute';
     const KEY_DESCRIPTION_ATTRIBUTE = 'description_attribute';
@@ -59,15 +60,6 @@ class Attributes extends AbstractConfig implements AttributesInterface
         );
 
         $fields = [
-            $this->fieldFactory->create(
-                Checkbox::TYPE_CODE,
-                [
-                    'name' => self::KEY_USE_PRODUCT_ID_FOR_SKU,
-                    'label' => __('Use Product ID for SKU'),
-                    'sortOrder' => 10,
-                ]
-            ),
-
             $this->fieldFactory->create(
                 Select::TYPE_CODE,
                 [
