@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Communication/etc/communication.xsd">
+    <topic name="sfm_product_action_shoppingfeed_attribute.update" request="Magento\AsynchronousOperations\Api\Data\OperationInterface">
+        <handler name="sfm_product_action_shoppingfeed_attribute.update" type="ShoppingFeed\Manager\Model\Feed\Product\Backend\Consumer" method="process" />
+    </topic>
+</config>

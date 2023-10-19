@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework-message-queue:etc/consumer.xsd">
+    <consumer name="sfm_product_action_shoppingfeed_attribute.update" queue="sfm_product_action_shoppingfeed_attribute.update" handler="ShoppingFeed\Manager\Model\Feed\Product\Backend\Consumer::process" />
+</config>

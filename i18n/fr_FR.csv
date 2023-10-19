@@ -499,6 +499,7 @@
 "Short Description Attribute","Attribut description courte"
 "SKU","Référence"
 "Some attribute codes are reserved. If one of the attributes below is chosen, it will be exported as ""[code]_attribute"":","Certains codes d'attributs sont réservés. Si un des attributs ci-dessous est choisi, il sera exporté en tant que ""[code]_attribute"" :"
+"Something went wrong while scheduling the Shopping Feed attributes for update.","Une erreur est survenue lors de la planification de la mise à jour des attributs Shopping Feed."
 "Special","Spécial"
 "Split Last Name When Empty First Name","Découper le nom quand le prénom est vide"
 "Status","Statut"

@@ -27,6 +27,11 @@ class SaveProductsAttributesObserver implements ObserverInterface
     private $attributeActionHelper;
 
     /**
+     * @var bool
+     */
+    private $hasSavedProductAttributes = false;
+
+    /**
      * @param RequestInterface $request
      * @param FeedProductResourceFactory $feedProductResourceFactory
      * @param AttributeActionHelper $attributeActionHelper
@@ -51,16 +56,22 @@ class SaveProductsAttributesObserver implements ObserverInterface
             && is_array($params[FeedAttributesTab::DATA_SCOPE])
             && !empty($productIds)
         ) {
+            $this->hasSavedProductAttributes = true;
             $feedProductResource = $this->feedProductResourceFactory->create();
 
             foreach ($params[FeedAttributesTab::DATA_SCOPE] as $storeId => $storeFeedAttributes) {
                 $feedProductResource->updateProductFeedAttributes(
                     $productIds,
                     (int) $storeId,
-                    $storeFeedAttributes['is_selected'] ?? null,
-                    $storeFeedAttributes['selected_category_id'] ?? null
+                    $storeFeedAttributes[FeedAttributesTab::FIELD_IS_SELECTED] ?? null,
+                    $storeFeedAttributes[FeedAttributesTab::FIELD_SELECTED_CATEGORY_ID] ?? null
                 );
             }
         }
+    }
+
+    public function hasSavedProductAttributes()
+    {
+        return $this->hasSavedProductAttributes;
     }
 }
