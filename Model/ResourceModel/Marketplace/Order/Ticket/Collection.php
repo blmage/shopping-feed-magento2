@@ -19,6 +19,38 @@ class Collection extends AbstractCollection
         $this->_init(Ticket::class, TicketResource::class);
     }
 
+    private function joinOrderTable()
+    {
+        if (!$this->hasFlag('_order_table_joined_')) {
+            $this->join(
+                [ 'order_table' => $this->tableDictionary->getMarketplaceOrderTableName() ],
+                'main_table.order_id = order_table.order_id',
+                []
+            );
+
+            $this->setFlag('_order_table_joined_', true);
+
+            $this->addFilterToMap(TicketInterface::ORDER_ID, 'main_table.' . TicketInterface::ORDER_ID);
+            $this->addFilterToMap(TicketInterface::STATUS, 'main_table.' . TicketInterface::STATUS);
+            $this->addFilterToMap(TicketInterface::CREATED_AT, 'main_table.' . TicketInterface::CREATED_AT);
+        }
+
+        return $this;
+    }
+
+    /**
+     * @param int|int[] $ids
+     * @return $this
+     */
+    public function addStoreIdFilter($ids)
+    {
+        $this->joinOrderTable();
+
+        $this->addFieldToFilter('order_table.store_id', [ 'in' => $this->prepareIdFilterValue($ids) ]);
+
+        return $this;
+    }
+
     /**
      * @param int|int[] $ids
      * @return $this
@@ -74,6 +106,20 @@ class Collection extends AbstractCollection
     public function addStatusFilter($status)
     {
         $this->addFieldToFilter(TicketInterface::STATUS, (int) $status);
+
+        return $this;
+    }
+
+    /**
+     * @param int $days
+     * @return $this
+     */
+    public function addMaxAgeFilter($days)
+    {
+        $this->addFieldToFilter(
+            TicketInterface::CREATED_AT,
+            [ 'gteq' => new \Zend_Db_Expr(sprintf('DATE_SUB(NOW(), INTERVAL %d DAY)', (int) $days)) ]
+        );
 
         return $this;
     }
