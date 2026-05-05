@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.18.0] - 2026-05-05
+### Changed
+- Improve synchronization of order ticket statuses
+
 ## [1.17.1] - 2026-03-16
 ### Fixed
 - Fix implicit conversion error when importing bundle items
