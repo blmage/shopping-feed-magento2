@@ -383,7 +383,9 @@ class Manager
 
         $pendingTickets = $this->orderTicketCollectionFactory
             ->create()
+            ->addStoreIdFilter($store->getId())
             ->addStatusFilter(TicketInterface::STATUS_PENDING)
+            ->addMaxAgeFilter(7)
             ->setCurPage(1)
             ->setPageSize($this->notificationSliceSize);
 
@@ -408,6 +410,10 @@ class Manager
                             foreach ($ticketApi->getByBatch($batchId) as $batchTicket) {
                                 $apiTicket = $batchTicket;
                                 break;
+                            }
+
+                            if (!$apiTicket) {
+                                $ticketStatus = TicketInterface::API_STATUS_SUCCEED;
                             }
                         } elseif ($ticketId = $ticket->getShoppingFeedTicketId()) {
                             $apiTicket = $ticketApi->getOne($ticketId);
