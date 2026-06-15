@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.19.0] - 2026-06-15
+### Added
+- Handle new `taxMode` field when importing marketplace orders
+- Implement workarounds for the new address field validation behaviors
+
 ## [1.18.0] - 2026-05-05
 ### Changed
 - Improve synchronization of order ticket statuses
