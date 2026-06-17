@@ -121,7 +121,8 @@ class CartFixed extends BaseCartFixed
             $hasCollectorParam = false;
 
             $class = new \ReflectionClass(BaseCartFixed::class);
-            $params = $class->getConstructor()?->getParameters() ?? [];
+            $constructor = $class->getConstructor();
+            $params = (null !== $constructor) ? $constructor->getParameters() : [];
 
             foreach ($params as $param) {
                 if ($param->getName() === 'existingDiscountRuleCollector') {

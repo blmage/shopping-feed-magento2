@@ -51,7 +51,7 @@ abstract class AbstractCommand extends Command
         parent::__construct();
     }
 
-    protected function execute(InputInterface $input, OutputInterface $output)
+    protected function execute(InputInterface $input, OutputInterface $output): int
     {
         return $this->appState->emulateAreaCode(
             AppArea::AREA_FRONTEND,

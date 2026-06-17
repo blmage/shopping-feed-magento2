@@ -31,7 +31,7 @@ class Collector
     /**
      * @var int[]
      */
-    private array $excludedShipmentIds = [];
+    private $excludedShipmentIds = [];
 
     /**
      * @param SalesShipmentCollectionFactory $salesShipmentCollectionFactory
