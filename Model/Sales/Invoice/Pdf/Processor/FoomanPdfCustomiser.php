@@ -10,9 +10,9 @@ use ShoppingFeed\Manager\Api\Sales\Invoice\Pdf\ProcessorInterface;
 class FoomanPdfCustomiser implements ProcessorInterface
 {
     /**
-     * @var \Fooman\PdfCore\Model\PdfRenderer|null
+     * @var \Fooman\PdfCore\Model\PdfRendererFactory|null
      */
-    private $pdfRenderer;
+    private $pdfRendererFactory;
 
     /**
      * @var \Fooman\PdfCustomiser\Block\InvoiceFactory|null
@@ -23,10 +23,10 @@ class FoomanPdfCustomiser implements ProcessorInterface
     {
         try {
             $objectManager = ObjectManager::getInstance();
-            $this->pdfRenderer = $objectManager->get('\Fooman\PdfCore\Model\PdfRenderer');
+            $this->pdfRendererFactory = $objectManager->get('\Fooman\PdfCore\Model\PdfRendererFactory');
             $this->invoiceDocumentFactory = $objectManager->get('\Fooman\PdfCustomiser\Block\InvoiceFactory');
         } catch (\Exception $e) {
-            $this->pdfRenderer = null;
+            $this->pdfRendererFactory = null;
             $this->invoiceDocumentFactory = null;
         }
     }
@@ -43,15 +43,18 @@ class FoomanPdfCustomiser implements ProcessorInterface
 
     public function isAvailable()
     {
-        return (null !== $this->pdfRenderer) && (null !== $this->invoiceDocumentFactory);
+        return (
+            (null !== $this->pdfRendererFactory)
+            && (null !== $this->invoiceDocumentFactory)
+        );
     }
 
     public function getInvoicePdfContent(InvoiceInterface $invoice)
     {
-        if ((null === $this->pdfRenderer) || (null === $this->invoiceDocumentFactory)) {
+        if ((null === $this->pdfRendererFactory) || (null === $this->invoiceDocumentFactory)) {
             throw new LocalizedException(__('Fooman PDF Customiser module is not installed.'));
         }
-        
+
         $document = $this->invoiceDocumentFactory->create(
             [
                 'data' => [
@@ -60,10 +63,12 @@ class FoomanPdfCustomiser implements ProcessorInterface
             ]
         );
 
-        $this->pdfRenderer->addDocument($document);
+        $pdfRenderer = $this->pdfRendererFactory->create();
 
         try {
-            return $this->pdfRenderer->getPdfAsString();
+            $pdfRenderer->addDocument($document);
+
+            return $pdfRenderer->getPdfAsString();
         } catch (\Exception $e) {
             throw new LocalizedException(__('Failed to generate PDF: %1', $e->getMessage()));
         }
