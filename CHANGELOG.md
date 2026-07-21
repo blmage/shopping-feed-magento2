@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.20.0] - 2026-07-21
+### Added
+- Add ability to delete multiple order logs at once
+- Add status filter to order tickets listing
+
+### Fixed
+- Fix compatibility with Magento 2.4.9
+- Fix compatibility with PHP 8.4 (upstream dependency)
+- Fix syncing of invoice PDF using Fooman processor
+
 ## [1.19.0] - 2026-06-15
 ### Added
 - Handle new `taxMode` field when importing marketplace orders
