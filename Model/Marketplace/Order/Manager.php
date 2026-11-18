@@ -909,9 +909,12 @@ class Manager
                             continue 2;
                         }
 
-                        $items[] = [
-                            'id' => $salesOrderItemShoppingFeedIds[$salesOrderItemId],
-                            'quantity' => (int) $shipmentItem->getQty(),
+                        // A marketplace item may have been imported as several order items (to preserve its total).
+                        $sfItemId = $salesOrderItemShoppingFeedIds[$salesOrderItemId];
+
+                        $items[$sfItemId] = [
+                            'id' => $sfItemId,
+                            'quantity' => ($items[$sfItemId]['quantity'] ?? 0) + (int) $shipmentItem->getQty(),
                         ];
                     }
 
@@ -920,7 +923,7 @@ class Manager
                             $marketplaceOrder,
                             $shipmentId,
                             $chosenTrack,
-                            $items,
+                            array_values($items),
                             $store
                         );
                     } catch (\Exception $e) {

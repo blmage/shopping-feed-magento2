@@ -1,0 +1,710 @@
+diff --git a/Model/Marketplace/Order/Manager.php b/Model/Marketplace/Order/Manager.php
+index 8bf7458..1d39dc2 100644
+--- a/Model/Marketplace/Order/Manager.php
++++ b/Model/Marketplace/Order/Manager.php
+@@ -909,9 +909,12 @@ class Manager
+                             continue 2;
+                         }
+ 
+-                        $items[] = [
+-                            'id' => $salesOrderItemShoppingFeedIds[$salesOrderItemId],
+-                            'quantity' => (int) $shipmentItem->getQty(),
++                        // A marketplace item may have been imported as several order items (to preserve its total).
++                        $sfItemId = $salesOrderItemShoppingFeedIds[$salesOrderItemId];
++
++                        $items[$sfItemId] = [
++                            'id' => $sfItemId,
++                            'quantity' => ($items[$sfItemId]['quantity'] ?? 0) + (int) $shipmentItem->getQty(),
+                         ];
+                     }
+ 
+@@ -919,7 +922,7 @@ class Manager
+                         $marketplaceOrder,
+                         $shipmentId,
+                         $chosenTrack,
+-                        $items,
++                        array_values($items),
+                         $store
+                     );
+                 }
+diff --git a/Model/Sales/Order/Config.php b/Model/Sales/Order/Config.php
+index 004680a..c769b8c 100644
+--- a/Model/Sales/Order/Config.php
++++ b/Model/Sales/Order/Config.php
+@@ -32,6 +32,7 @@ use ShoppingFeed\Manager\Model\Config\Value\HandlerInterface as ValueHandlerInte
+ use ShoppingFeed\Manager\Model\Customer\Group\Source as CustomerGroupSource;
+ use ShoppingFeed\Manager\Model\Marketplace\Order\Syncing\Action\Source as OrderSyncingActionSource;
+ use ShoppingFeed\Manager\Model\Marketplace\Source as MarketplaceSource;
++use ShoppingFeed\Manager\Model\Sales\Order\Item\PriceAllocator as ItemPriceAllocator;
+ use ShoppingFeed\Manager\Model\Sales\Order\SyncerInterface as SalesOrderSyncerInterface;
+ use ShoppingFeed\Manager\Model\StringHelper;
+ 
+@@ -44,6 +45,10 @@ class Config extends AbstractConfig implements ConfigInterface
+     const KEY_CHECK_PRODUCT_AVAILABILITY_AND_OPTIONS = 'check_product_availability_and_options';
+     const KEY_CHECK_PRODUCT_WEBSITES = 'check_product_websites';
+     const KEY_CHECK_ADDRESS_COUNTRIES = 'check_address_countries';
++    const KEY_CHECK_ORDER_TOTAL = 'check_order_total';
++    const KEY_MARKETPLACE_ROUNDING_MODES = 'marketplace_rounding_modes';
++    const KEY_MARKETPLACE_ROUNDING_MODES__MARKETPLACE = 'marketplace';
++    const KEY_MARKETPLACE_ROUNDING_MODES__ROUNDING_MODE = 'rounding_mode';
+     const KEY_SYNC_NON_IMPORTED_ITEMS = 'sync_non_imported_items';
+     const KEY_SYNC_NON_IMPORTED_ADDRESSES = 'sync_non_imported_addresses';
+     const KEY_IMPORT_CUSTOMERS = 'import_customers';
+@@ -442,6 +447,22 @@ class Config extends AbstractConfig implements ConfigInterface
+                 ]
+             ),
+ 
++            $this->fieldFactory->create(
++                Checkbox::TYPE_CODE,
++                [
++                    'name' => self::KEY_CHECK_ORDER_TOTAL,
++                    'isCheckedByDefault' => false,
++                    'label' => __('Check Order Total'),
++                    'checkedNotice' => __(
++                        'Orders whose total would differ from the total on the marketplace will not be imported.'
++                    ),
++                    'uncheckedNotice' => __(
++                        'Orders whose total would differ from the total on the marketplace will still be imported.'
++                    ),
++                    'sortOrder' => 47,
++                ]
++            ),
++
+             $this->fieldFactory->create(
+                 Checkbox::TYPE_CODE,
+                 [
+@@ -920,6 +941,27 @@ class Config extends AbstractConfig implements ConfigInterface
+             ]
+         );
+ 
++        $roundingModeHandler = $this->valueHandlerFactory->create(
++            OptionHandler::TYPE_CODE,
++            [
++                'dataType' => UiText::NAME,
++                'optionArray' => [
++                    [
++                        'value' => ItemPriceAllocator::ROUNDING_MODE_UNIT_PRICE,
++                        'label' => __('Unit Price'),
++                    ],
++                    [
++                        'value' => ItemPriceAllocator::ROUNDING_MODE_ROW_TOTAL,
++                        'label' => __('Row Total'),
++                    ],
++                    [
++                        'value' => ItemPriceAllocator::ROUNDING_MODE_ORDER_TOTAL,
++                        'label' => __('Order Total'),
++                    ],
++                ],
++            ]
++        );
++
+         $defaultAddressImportModeHandler = $this->valueHandlerFactory->create(
+             OptionHandler::TYPE_CODE,
+             [
+@@ -998,6 +1040,37 @@ class Config extends AbstractConfig implements ConfigInterface
+ 
+         return array_merge(
+             [
++                $this->fieldFactory->create(
++                    DynamicRows::TYPE_CODE,
++                    [
++                        'name' => self::KEY_MARKETPLACE_ROUNDING_MODES,
++                        'label' => __('Marketplace Rounding Modes'),
++                        'fields' => [
++                            $this->fieldFactory->create(
++                                Select::TYPE_CODE,
++                                [
++                                    'name' => self::KEY_MARKETPLACE_ROUNDING_MODES__MARKETPLACE,
++                                    'valueHandler' => $marketplaceHandler,
++                                    'isRequired' => true,
++                                    'label' => __('Marketplace'),
++                                    'sortOrder' => 10,
++                                ]
++                            ),
++                            $this->fieldFactory->create(
++                                Select::TYPE_CODE,
++                                [
++                                    'name' => self::KEY_MARKETPLACE_ROUNDING_MODES__ROUNDING_MODE,
++                                    'valueHandler' => $roundingModeHandler,
++                                    'isRequired' => true,
++                                    'label' => __('Rounding Mode'),
++                                    'sortOrder' => 20,
++                                ]
++                            ),
++                        ],
++                        'sortOrder' => 48,
++                    ]
++                ),
++
+                 $this->fieldFactory->create(
+                     DynamicRows::TYPE_CODE,
+                     [
+@@ -1283,6 +1356,23 @@ class Config extends AbstractConfig implements ConfigInterface
+         return $this->getFieldValue($store, self::KEY_CHECK_ADDRESS_COUNTRIES);
+     }
+ 
++    public function shouldCheckOrderTotal(StoreInterface $store)
++    {
++        return $this->getFieldValue($store, self::KEY_CHECK_ORDER_TOTAL);
++    }
++
++    public function getMarketplaceRoundingMode(StoreInterface $store, $marketplace)
++    {
++        return $this->getMarketplaceBasedConfigValue(
++            static::KEY_MARKETPLACE_ROUNDING_MODES,
++            static::KEY_MARKETPLACE_ROUNDING_MODES__MARKETPLACE,
++            static::KEY_MARKETPLACE_ROUNDING_MODES__ROUNDING_MODE,
++            $store,
++            $marketplace,
++            null
++        );
++    }
++
+     public function shouldSyncNonImportedItems(StoreInterface $store)
+     {
+         return $this->getFieldValue($store, self::KEY_SYNC_NON_IMPORTED_ITEMS);
+diff --git a/Model/Sales/Order/ConfigInterface.php b/Model/Sales/Order/ConfigInterface.php
+index 1ae7af4..31630fa 100644
+--- a/Model/Sales/Order/ConfigInterface.php
++++ b/Model/Sales/Order/ConfigInterface.php
+@@ -70,6 +70,19 @@ interface ConfigInterface extends BaseConfig
+      */
+     public function shouldCheckAddressCountries(StoreInterface $store);
+ 
++    /**
++     * @param StoreInterface $store
++     * @return bool
++     */
++    public function shouldCheckOrderTotal(StoreInterface $store);
++
++    /**
++     * @param StoreInterface $store
++     * @param string $marketplace
++     * @return string|null The rounding mode configured for the marketplace, if any.
++     */
++    public function getMarketplaceRoundingMode(StoreInterface $store, $marketplace);
++
+     /**
+      * @param StoreInterface $store
+      * @return bool
+diff --git a/Model/Sales/Order/Importer.php b/Model/Sales/Order/Importer.php
+index 2e5ffe0..0035ce2 100644
+--- a/Model/Sales/Order/Importer.php
++++ b/Model/Sales/Order/Importer.php
+@@ -53,6 +53,7 @@ use ShoppingFeed\Manager\Model\ResourceModel\Shipping\Method\Rule\CollectionFact
+ use ShoppingFeed\Manager\Model\Sales\Order\Business\TaxManager as BusinessTaxManager;
+ use ShoppingFeed\Manager\Model\Sales\Order\ConfigInterface as OrderConfigInterface;
+ use ShoppingFeed\Manager\Model\Sales\Order\Customer\Importer as CustomerImporter;
++use ShoppingFeed\Manager\Model\Sales\Order\Item\PriceAllocator as ItemPriceAllocator;
+ use ShoppingFeed\Manager\Model\Sales\Order\SalesRule\Applier as SalesRuleApplier;
+ use ShoppingFeed\Manager\Model\Shipping\Method\ApplierPoolInterface as ShippingMethodApplierPoolInterface;
+ use ShoppingFeed\Manager\Model\TimeHelper;
+@@ -239,6 +240,11 @@ class Importer implements ImporterInterface
+      */
+     private $importState;
+ 
++    /**
++     * @var ItemPriceAllocator
++     */
++    private $itemPriceAllocator;
++
+     /**
+      * @var BaseStore|null
+      */
+@@ -281,6 +287,10 @@ class Importer implements ImporterInterface
+      * @param MarketplaceAddressCollectionFactory $marketplaceAddressCollectionFactory
+      * @param MarketplaceItemCollectionFactory $marketplaceItemCollectionFactory
+      * @param SalesShipmentFactory|null $salesShipmentFactory
++     * @param SalesRuleApplier|null $salesRuleApplier
++     * @param SalesOrderRepositoryInterface|null $salesOrderRepository
++     * @param ImportStateInterface|null $importState
++     * @param ItemPriceAllocator|null $itemPriceAllocator
+      */
+     public function __construct(
+         LoggerInterface $logger,
+@@ -316,7 +326,8 @@ class Importer implements ImporterInterface
+         ?SalesShipmentFactory $salesShipmentFactory = null,
+         ?SalesRuleApplier $salesRuleApplier = null,
+         ?SalesOrderRepositoryInterface $salesOrderRepository = null,
+-        ?ImportStateInterface $importState = null
++        ?ImportStateInterface $importState = null,
++        ?ItemPriceAllocator $itemPriceAllocator = null
+     ) {
+         $this->logger = $logger;
+         $this->transactionFactory = $transactionFactory;
+@@ -362,6 +373,9 @@ class Importer implements ImporterInterface
+ 
+         $this->importState = $importState
+             ?? $objectManager->get(ImportStateInterface::class);
++
++        $this->itemPriceAllocator = $itemPriceAllocator
++            ?? $objectManager->get(ItemPriceAllocator::class);
+     }
+ 
+     /**
+@@ -1257,10 +1271,24 @@ class Importer implements ImporterInterface
+         $isWeeeEnabled = $this->weeeHelper->isEnabled($this->getCurrentTargetBaseStore($store));
+         $shouldUseItemReferenceAsProductId = $this->orderGeneralConfig->shouldUseItemReferenceAsProductId($store);
+ 
++        $marketplaceOrder = $this->importState->getCurrentlyImportedMarketplaceOrder();
++
++        $roundingMode = $this->itemPriceAllocator->getMarketplaceRoundingMode(
++            $store,
++            (null !== $marketplaceOrder) ? $marketplaceOrder->getMarketplaceName() : ''
++        );
++
++        if (ItemPriceAllocator::ROUNDING_MODE_UNIT_PRICE !== $roundingMode) {
++            $this->logDebugMessage(sprintf('Using the "%s" rounding mode.', $roundingMode));
++        }
++
++        $itemsQuoteParts = $this->itemPriceAllocator->getItemsQuoteParts($marketplaceItems, $roundingMode);
++
+         /** @var MarketplaceItemInterface $marketplaceItem */
+-        foreach ($marketplaceItems as $marketplaceItem) {
++        foreach ($marketplaceItems as $itemKey => $marketplaceItem) {
+             $reference = $marketplaceItem->getReference();
+             $quoteStoreId = $quote->getStoreId();
++            $quoteParts = $itemsQuoteParts[$itemKey];
+ 
+             $this->logDebugMessage(sprintf('Importing the item "%s".', $reference));
+ 
+@@ -1309,25 +1337,45 @@ class Importer implements ImporterInterface
+                     );
+                 }
+ 
+-                if ($product->getTypeId() === BundleProductType::TYPE_CODE) {
+-                    $this->addBundleProductToQuote(
+-                        $quote,
+-                        $marketplaceItem,
+-                        $product,
+-                        $isUntaxedBusinessOrder,
+-                        $isWeeeEnabled,
+-                        $store
++                if ((count($quoteParts) > 1) || (reset($quoteParts) !== $marketplaceItem)) {
++                    $partLabels = array_map(
++                        function (MarketplaceItemInterface $part) {
++                            return sprintf('%d x %.2f', $part->getQuantity(), $part->getPrice());
++                        },
++                        $quoteParts
+                     );
+-                } else {
+-                    $this->addNonParentProductToQuote(
+-                        $quote,
+-                        $marketplaceItem,
+-                        $product,
+-                        $isUntaxedBusinessOrder,
+-                        $isWeeeEnabled,
+-                        $store
++
++                    $this->logDebugMessage(
++                        sprintf(
++                            'Importing the item as %s to preserve the marketplace rounding.',
++                            implode(' + ', $partLabels)
++                        )
+                     );
+                 }
++
++                foreach ($quoteParts as $marketplaceItemPart) {
++                    $partProduct = clone $product;
++
++                    if ($partProduct->getTypeId() === BundleProductType::TYPE_CODE) {
++                        $this->addBundleProductToQuote(
++                            $quote,
++                            $marketplaceItemPart,
++                            $partProduct,
++                            $isUntaxedBusinessOrder,
++                            $isWeeeEnabled,
++                            $store
++                        );
++                    } else {
++                        $this->addNonParentProductToQuote(
++                            $quote,
++                            $marketplaceItemPart,
++                            $partProduct,
++                            $isUntaxedBusinessOrder,
++                            $isWeeeEnabled,
++                            $store
++                        );
++                    }
++                }
+             } catch (LocalizedException $e) {
+                 throw new LocalizedException(
+                     __(
+diff --git a/Model/Sales/Order/Item/PriceAllocator.php b/Model/Sales/Order/Item/PriceAllocator.php
+new file mode 100644
+index 0000000..a96d27c
+--- /dev/null
++++ b/Model/Sales/Order/Item/PriceAllocator.php
+@@ -0,0 +1,235 @@
++<?php
++
++namespace ShoppingFeed\Manager\Model\Sales\Order\Item;
++
++use ShoppingFeed\Manager\Api\Data\Account\StoreInterface;
++use ShoppingFeed\Manager\Api\Data\Marketplace\Order\ItemInterface as MarketplaceItemInterface;
++use ShoppingFeed\Manager\Model\Sales\Order\ConfigInterface as OrderConfigInterface;
++use ShoppingFeed\Manager\Model\StringHelper;
++
++class PriceAllocator
++{
++    const ROUNDING_MODE_UNIT_PRICE = 'unit_price';
++    const ROUNDING_MODE_ROW_TOTAL = 'row_total';
++    const ROUNDING_MODE_ORDER_TOTAL = 'order_total';
++
++    /**
++     * Prices and quantities are stored with 4 decimals:
++     * calculations are made on integer amounts of ten-thousandths, to prevent any floating-point error.
++     */
++    const UNIT_FACTOR = 10000;
++    const UNITS_PER_CENT = 100;
++
++    /**
++     * @var OrderConfigInterface
++     */
++    private $orderGeneralConfig;
++
++    /**
++     * @var StringHelper
++     */
++    private $stringHelper;
++
++    /**
++     * @var string[]
++     */
++    private $marketplaceRoundingModes = [];
++
++    /**
++     * @param OrderConfigInterface $orderGeneralConfig
++     * @param StringHelper $stringHelper
++     * @param string[] $marketplaceRoundingModes
++     * @throws \InvalidArgumentException
++     */
++    public function __construct(
++        OrderConfigInterface $orderGeneralConfig,
++        StringHelper $stringHelper,
++        array $marketplaceRoundingModes = []
++    ) {
++        $this->orderGeneralConfig = $orderGeneralConfig;
++        $this->stringHelper = $stringHelper;
++
++        foreach ($marketplaceRoundingModes as $marketplace => $mode) {
++            if (!$this->isValidRoundingMode($mode)) {
++                throw new \InvalidArgumentException(
++                    sprintf('Unknown rounding mode "%s" for the marketplace "%s".', $mode, $marketplace)
++                );
++            }
++
++            $this->marketplaceRoundingModes[$this->stringHelper->getNormalizedCode($marketplace)] = $mode;
++        }
++    }
++
++    /**
++     * @param mixed $mode
++     * @return bool
++     */
++    private function isValidRoundingMode($mode)
++    {
++        return in_array(
++            $mode,
++            [
++                self::ROUNDING_MODE_UNIT_PRICE,
++                self::ROUNDING_MODE_ROW_TOTAL,
++                self::ROUNDING_MODE_ORDER_TOTAL,
++            ],
++            true
++        );
++    }
++
++    /**
++     * @param StoreInterface $store
++     * @param string $marketplace
++     * @return string
++     */
++    public function getMarketplaceRoundingMode(StoreInterface $store, $marketplace)
++    {
++        $mode = $this->orderGeneralConfig->getMarketplaceRoundingMode($store, $marketplace);
++
++        if ($this->isValidRoundingMode($mode)) {
++            return $mode;
++        }
++
++        return $this->marketplaceRoundingModes[$this->stringHelper->getNormalizedCode($marketplace)]
++            ?? self::ROUNDING_MODE_UNIT_PRICE;
++    }
++
++    /**
++     * Divides two integers, rounding the result half away from zero (like round()).
++     *
++     * @param int $dividend
++     * @param int $divisor
++     * @return int
++     */
++    private function divideAndRound($dividend, $divisor)
++    {
++        $halfDivisor = intdiv($divisor, 2);
++
++        return ($dividend >= 0)
++            ? intdiv($dividend + $halfDivisor, $divisor)
++            : -intdiv(-$dividend + $halfDivisor, $divisor);
++    }
++
++    /**
++     * @param MarketplaceItemInterface[] $items
++     * @param string $mode The rounding mode of the marketplace.
++     * @return MarketplaceItemInterface[][] The parts to import for each item, indexed like the items.
++     */
++    public function getItemsQuoteParts(array $items, $mode)
++    {
++        $quoteParts = [];
++
++        foreach ($items as $key => $item) {
++            $quoteParts[$key] = [ $item ];
++        }
++
++        if (
++            (self::ROUNDING_MODE_ROW_TOTAL !== $mode)
++            && (self::ROUNDING_MODE_ORDER_TOTAL !== $mode)
++        ) {
++            return $quoteParts;
++        }
++
++        // The items whose total can be adjusted.
++        $lines = [];
++        $orderTotal = 0;
++        // The total in cents that Magento will compute for the other items.
++        $fixedTotalInCents = 0;
++
++        foreach ($items as $key => $item) {
++            $unitPrice = (int) round($item->getPrice() * self::UNIT_FACTOR);
++            $quantity = (int) round($item->getQuantity() * self::UNIT_FACTOR);
++            $total = $this->divideAndRound($unitPrice * $quantity, self::UNIT_FACTOR);
++            $orderTotal += $total;
++
++            if (
++                ($quantity <= 0)
++                || ($quantity % self::UNIT_FACTOR !== 0)
++                // Empty custom prices are ignored by Magento: each part needs a unit price of at least one cent.
++                || ($unitPrice < self::UNITS_PER_CENT)
++                // Without an ID, the parts would be merged in the quote.
++                || (($quantity > self::UNIT_FACTOR) && !$item->getShoppingFeedItemId())
++            ) {
++                /** @see \Magento\Quote\Model\Quote\Item\AbstractItem::calcRowTotal() */
++                $fixedTotalInCents += $this->divideAndRound(
++                    $this->divideAndRound($unitPrice, self::UNITS_PER_CENT) * $quantity,
++                    self::UNIT_FACTOR
++                );
++
++                continue;
++            }
++
++            $lines[$key] = [
++                'unit_price' => $unitPrice,
++                'quantity' => intdiv($quantity, self::UNIT_FACTOR),
++                'total' => $total,
++            ];
++        }
++
++        $lineTotalsInCents = [];
++
++        if (self::ROUNDING_MODE_ROW_TOTAL === $mode) {
++            foreach ($lines as $key => $line) {
++                $lineTotalsInCents[$key] = $this->divideAndRound($line['total'], self::UNITS_PER_CENT);
++            }
++        } else {
++            $remainingCents = $this->divideAndRound($orderTotal, self::UNITS_PER_CENT) - $fixedTotalInCents;
++
++            foreach ($lines as $key => $line) {
++                $lineTotalsInCents[$key] = intdiv($line['total'], self::UNITS_PER_CENT);
++                $remainingCents -= $lineTotalsInCents[$key];
++            }
++
++            // Allocate the remaining cents to the lines with the largest remainders (in their original order on ties).
++            $positions = array_flip(array_keys($lines));
++            $sortedKeys = array_keys($lines);
++
++            usort(
++                $sortedKeys,
++                function ($keyA, $keyB) use ($lines, $positions) {
++                    $remainderA = $lines[$keyA]['total'] % self::UNITS_PER_CENT;
++                    $remainderB = $lines[$keyB]['total'] % self::UNITS_PER_CENT;
++
++                    return ($remainderB <=> $remainderA) ?: ($positions[$keyA] <=> $positions[$keyB]);
++                }
++            );
++
++            // The remaining cents can only be out of bounds because of the items whose total can not be adjusted.
++            $remainingCents = max(0, min($remainingCents, count($lines)));
++
++            foreach (array_slice($sortedKeys, 0, $remainingCents) as $key) {
++                $lineTotalsInCents[$key]++;
++            }
++        }
++
++        foreach ($lineTotalsInCents as $key => $totalInCents) {
++            $quantity = $lines[$key]['quantity'];
++            $magentoUnitPriceInCents = $this->divideAndRound($lines[$key]['unit_price'], self::UNITS_PER_CENT);
++
++            if ($magentoUnitPriceInCents * $quantity === $totalInCents) {
++                // Magento will compute the expected total by itself.
++                continue;
++            }
++
++            $lowerUnitPriceInCents = intdiv($totalInCents, $quantity);
++            $upperQuantity = $totalInCents % $quantity;
++            $quoteParts[$key] = [];
++
++            $partQuantities = [
++                $lowerUnitPriceInCents => $quantity - $upperQuantity,
++                $lowerUnitPriceInCents + 1 => $upperQuantity,
++            ];
++
++            foreach ($partQuantities as $unitPriceInCents => $partQuantity) {
++                if ($partQuantity > 0) {
++                    $part = clone $items[$key];
++                    $part->setQuantity($partQuantity);
++                    $part->setPrice($unitPriceInCents / self::UNITS_PER_CENT);
++                    $quoteParts[$key][] = $part;
++                }
++            }
++        }
++
++        return $quoteParts;
++    }
++}
+diff --git a/Observer/BeforeQuoteSubmitObserver.php b/Observer/BeforeQuoteSubmitObserver.php
+index 8ca44d7..542f999 100644
+--- a/Observer/BeforeQuoteSubmitObserver.php
++++ b/Observer/BeforeQuoteSubmitObserver.php
+@@ -5,6 +5,7 @@ namespace ShoppingFeed\Manager\Observer;
+ use Magento\Framework\App\ObjectManager;
+ use Magento\Framework\Event\Observer;
+ use Magento\Framework\Event\ObserverInterface;
++use Magento\Framework\Exception\LocalizedException;
+ use Magento\Framework\Registry;
+ use Magento\Quote\Model\Quote;
+ use Magento\Sales\Model\Order;
+@@ -75,6 +76,31 @@ class BeforeQuoteSubmitObserver implements ObserverInterface
+             ?? ObjectManager::getInstance()->get(SalesOrderImportStateInterface::class);
+     }
+ 
++    /**
++     * @param Order $order
++     * @param MarketplaceOrderInterface $marketplaceOrder
++     * @throws LocalizedException
++     */
++    private function checkOrderGrandTotal(Order $order, MarketplaceOrderInterface $marketplaceOrder)
++    {
++        $orderGrandTotal = (float) $order->getGrandTotal();
++        $marketplaceGrandTotal = (float) $marketplaceOrder->getTotalAmount();
++
++        if ((int) round($orderGrandTotal * 100) !== (int) round($marketplaceGrandTotal * 100)) {
++            throw new LocalizedException(
++                __(
++                    'The order total (%1) differs from the total on the marketplace (%2).',
++                    sprintf('%.2f', $orderGrandTotal),
++                    sprintf('%.2f', $marketplaceGrandTotal)
++                )
++            );
++        }
++    }
++
++    /**
++     * @param Observer $observer
++     * @throws LocalizedException
++     */
+     public function execute(Observer $observer)
+     {
+         if (
+@@ -89,6 +115,11 @@ class BeforeQuoteSubmitObserver implements ObserverInterface
+ 
+                 if ($marketplaceOrder = $this->salesOrderImportState->getCurrentlyImportedMarketplaceOrder()) {
+                     $marketplaceName = $marketplaceOrder->getMarketplaceName();
++
++                    // The order is placed inside the import transaction: failing here rolls everything back.
++                    if ($store && $this->orderGeneralConfig->shouldCheckOrderTotal($store)) {
++                        $this->checkOrderGrandTotal($order, $marketplaceOrder);
++                    }
+                 }
+ 
+                 if (
+diff --git a/etc/di.xml b/etc/di.xml
+index 02918f4..562bb1f 100644
+--- a/etc/di.xml
++++ b/etc/di.xml
+@@ -288,6 +288,14 @@
+ 
+     <type name="ShoppingFeed\Manager\Model\Sales\Order\Business\TaxManager" shared="true"/>
+ 
++    <type name="ShoppingFeed\Manager\Model\Sales\Order\Item\PriceAllocator" shared="true">
++        <arguments>
++            <argument name="marketplaceRoundingModes" xsi:type="array">
++                <item name="retif" xsi:type="const">ShoppingFeed\Manager\Model\Sales\Order\Item\PriceAllocator::ROUNDING_MODE_ROW_TOTAL</item>
++            </argument>
++        </arguments>
++    </type>
++
+     <type name="ShoppingFeed\Manager\Model\Sales\Order\Shipment\Track\Collector" shared="true"/>
+ 
+     <virtualType name="ShoppingFeed\Manager\Model\Sales\Order\DebugHandler" type="ShoppingFeed\Manager\Model\LoggerHandler">
+diff --git a/i18n/fr_FR.csv b/i18n/fr_FR.csv
+index d73ecdb..55a5f4d 100644
+--- a/i18n/fr_FR.csv
++++ b/i18n/fr_FR.csv
+@@ -126,6 +126,7 @@
+ "Check Product Websites","Vérifier les sites web des produits"
+ "Category Selection","Sélection de catégories"
+ "Check Address Countries","Vérifier le pays des adresses"
++"Check Order Total","Vérifier le montant total des commandes"
+ "Choose a Value","Choisissez une valeur"
+ "Clear","Effacer"
+ "Command","Commande"
+@@ -389,6 +390,7 @@
+ "Marketplace Order Number","Numéro commande place de marché"
+ "Marketplace Orders","Commandes place de marché"
+ "Marketplace Payment Method Titles","Titre du mode de paiement par place de marché"
++"Marketplace Rounding Modes","Mode d'arrondi des montants par place de marché"
+ "Maximum Among Variations","Maximum parmi les déclinaisons"
+ "Maximum Between Salable and Stock","Maximum entre vendable et stock"
+ "Maximum Category Level","Niveau de catégorie maximum"
+@@ -434,6 +436,7 @@
+ "Order Logs","Logs des commandes"
+ "Order Reference","Référence de la commande"
+ "Order Sync Tickets","Tickets de synchronisation des commandes"
++"Order Total","Total de la commande"
+ "Orders","Commandes"
+ "Orders - General","Commandes - Général"
+ "Orders containing products that are not associated to the right website will not be imported.","Les commandes contenant des produits qui ne sont pas associés au bon site web ne seront pas importées."
+@@ -444,6 +447,8 @@
+ "Orders fulfilled by the marketplaces will not be shipped automatically.","Les commandes expédiées par les places de marché ne seront pas expédiées automatiquement."
+ "Orders already shipped on the marketplaces will be automatically shipped upon import.","Les commandes déjà expédiées sur les places de marché seront automatiquement expédiées à l'importation."
+ "Orders already shipped on the marketplaces will not be shipped automatically.","Les commandes déjà expédiées sur les places de marché ne seront pas expédiées automatiquement."
++"Orders whose total would differ from the total on the marketplace will not be imported.","Les commandes dont le montant total différerait de celui sur la place de marché ne seront pas importées."
++"Orders whose total would differ from the total on the marketplace will still be imported.","Les commandes dont le montant total différerait de celui sur la place de marché seront quand même importées."
+ "Orders will automatically be imported.","Les commandes seront importées automatiquement."
+ "Orders will be imported automatically.","Les commandes seront importées automatiquement."
+ "Orders will be automatically invoiced upon import.","Les commandes seront automatiquement facturées à l'importation."
+@@ -487,6 +492,8 @@
+ "Retain Previously Exported Products","Retenir les produits précédemment exportés"
+ "Retained","Retenu"
+ "Retention Duration for Previously Exported Products","Durée de la rétention pour les produits précédemment exportés"
++"Rounding Mode","Mode d'arrondi"
++"Row Total","Total ligne"
+ "Rows handler must contain at least one field.","Un handler de lignes doit contenir au moins un champ."
+ "Rows handler must only contain handlers of type: %1.","Un handler de lignes doit seulement contenir des champs de type : %2."
+ "Rule Information","Informations de la règle"
+@@ -616,6 +623,7 @@
+ "The order has been successfully imported.","La commande a bien été importée."
+ "The order import attempts have been successfully reset.","Les tentatives d'import de la commande ont bien été réinitialisées."
+ "The order import has been successfully cancelled.","L'import de la commande a bien été annulé."
++"The order total (%1) differs from the total on the marketplace (%2).","Le total de la commande (%1) diffère de celui sur la place de marché (%2)."
+ "The payment method that was chosen by the customer.","Le mode de paiement qui a été choisi par le client."
+ "The product is disabled.","Le produit est désactivé."
+ "The product with reference ""%1"" is disabled.","Le produit de référence ""%1"" est désactivé."
+@@ -657,6 +665,7 @@
+ "Undetermined (missing data)","Indéterminé (données manquantes)"
+ "unexisting account","compte inexistant"
+ "Unhandled Product Type","Type de produit non géré"
++"Unit Price","Prix unitaire"
+ "Unknown","Inconnu"
+ "Unless you know what you are doing, this option should probably be enabled.","À moins que vous ne sachiez ce que vous faites, cette option devrait probablement être activée."
+ "Undetermined","Indéterminé"

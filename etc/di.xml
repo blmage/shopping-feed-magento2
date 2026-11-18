@@ -288,6 +288,14 @@
 
     <type name="ShoppingFeed\Manager\Model\Sales\Order\Business\TaxManager" shared="true"/>
 
+    <type name="ShoppingFeed\Manager\Model\Sales\Order\Item\PriceAllocator" shared="true">
+        <arguments>
+            <argument name="marketplaceRoundingModes" xsi:type="array">
+                <item name="retif" xsi:type="const">ShoppingFeed\Manager\Model\Sales\Order\Item\PriceAllocator::ROUNDING_MODE_ROW_TOTAL</item>
+            </argument>
+        </arguments>
+    </type>
+
     <type name="ShoppingFeed\Manager\Model\Sales\Order\Shipment\Track\Collector" shared="true"/>
 
     <virtualType name="ShoppingFeed\Manager\Model\Sales\Order\DebugHandler" type="ShoppingFeed\Manager\Model\LoggerHandler">

@@ -74,6 +74,19 @@ interface ConfigInterface extends BaseConfig
      * @param StoreInterface $store
      * @return bool
      */
+    public function shouldCheckOrderTotal(StoreInterface $store);
+
+    /**
+     * @param StoreInterface $store
+     * @param string $marketplace
+     * @return string|null The rounding mode configured for the marketplace, if any.
+     */
+    public function getMarketplaceRoundingMode(StoreInterface $store, $marketplace);
+
+    /**
+     * @param StoreInterface $store
+     * @return bool
+     */
     public function shouldSyncNonImportedItems(StoreInterface $store);
 
     /**

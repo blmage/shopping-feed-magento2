@@ -5,6 +5,7 @@ namespace ShoppingFeed\Manager\Observer;
 use Magento\Framework\App\ObjectManager;
 use Magento\Framework\Event\Observer;
 use Magento\Framework\Event\ObserverInterface;
+use Magento\Framework\Exception\LocalizedException;
 use Magento\Framework\Registry;
 use Magento\Quote\Model\Quote;
 use Magento\Sales\Model\Order;
@@ -75,6 +76,31 @@ class BeforeQuoteSubmitObserver implements ObserverInterface
             ?? ObjectManager::getInstance()->get(SalesOrderImportStateInterface::class);
     }
 
+    /**
+     * @param Order $order
+     * @param MarketplaceOrderInterface $marketplaceOrder
+     * @throws LocalizedException
+     */
+    private function checkOrderGrandTotal(Order $order, MarketplaceOrderInterface $marketplaceOrder)
+    {
+        $orderGrandTotal = (float) $order->getGrandTotal();
+        $marketplaceGrandTotal = (float) $marketplaceOrder->getTotalAmount();
+
+        if ((int) round($orderGrandTotal * 100) !== (int) round($marketplaceGrandTotal * 100)) {
+            throw new LocalizedException(
+                __(
+                    'The order total (%1) differs from the total on the marketplace (%2).',
+                    sprintf('%.2f', $orderGrandTotal),
+                    sprintf('%.2f', $marketplaceGrandTotal)
+                )
+            );
+        }
+    }
+
+    /**
+     * @param Observer $observer
+     * @throws LocalizedException
+     */
     public function execute(Observer $observer)
     {
         if (
@@ -89,6 +115,11 @@ class BeforeQuoteSubmitObserver implements ObserverInterface
 
                 if ($marketplaceOrder = $this->salesOrderImportState->getCurrentlyImportedMarketplaceOrder()) {
                     $marketplaceName = $marketplaceOrder->getMarketplaceName();
+
+                    // The order is placed inside the import transaction: failing here rolls everything back.
+                    if ($store && $this->orderGeneralConfig->shouldCheckOrderTotal($store)) {
+                        $this->checkOrderGrandTotal($order, $marketplaceOrder);
+                    }
                 }
 
                 if (

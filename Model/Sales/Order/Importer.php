@@ -53,6 +53,7 @@ use ShoppingFeed\Manager\Model\ResourceModel\Shipping\Method\Rule\CollectionFact
 use ShoppingFeed\Manager\Model\Sales\Order\Business\TaxManager as BusinessTaxManager;
 use ShoppingFeed\Manager\Model\Sales\Order\ConfigInterface as OrderConfigInterface;
 use ShoppingFeed\Manager\Model\Sales\Order\Customer\Importer as CustomerImporter;
+use ShoppingFeed\Manager\Model\Sales\Order\Item\PriceAllocator as ItemPriceAllocator;
 use ShoppingFeed\Manager\Model\Sales\Order\SalesRule\Applier as SalesRuleApplier;
 use ShoppingFeed\Manager\Model\Shipping\Method\ApplierPoolInterface as ShippingMethodApplierPoolInterface;
 use ShoppingFeed\Manager\Model\TimeHelper;
@@ -240,6 +241,11 @@ class Importer implements ImporterInterface
     private $importState;
 
     /**
+     * @var ItemPriceAllocator
+     */
+    private $itemPriceAllocator;
+
+    /**
      * @var BaseStore|null
      */
     private $currentTargetBaseStore = null;
@@ -281,6 +287,10 @@ class Importer implements ImporterInterface
      * @param MarketplaceAddressCollectionFactory $marketplaceAddressCollectionFactory
      * @param MarketplaceItemCollectionFactory $marketplaceItemCollectionFactory
      * @param SalesShipmentFactory|null $salesShipmentFactory
+     * @param SalesRuleApplier|null $salesRuleApplier
+     * @param SalesOrderRepositoryInterface|null $salesOrderRepository
+     * @param ImportStateInterface|null $importState
+     * @param ItemPriceAllocator|null $itemPriceAllocator
      */
     public function __construct(
         LoggerInterface $logger,
@@ -316,7 +326,8 @@ class Importer implements ImporterInterface
         ?SalesShipmentFactory $salesShipmentFactory = null,
         ?SalesRuleApplier $salesRuleApplier = null,
         ?SalesOrderRepositoryInterface $salesOrderRepository = null,
-        ?ImportStateInterface $importState = null
+        ?ImportStateInterface $importState = null,
+        ?ItemPriceAllocator $itemPriceAllocator = null
     ) {
         $this->logger = $logger;
         $this->transactionFactory = $transactionFactory;
@@ -362,6 +373,9 @@ class Importer implements ImporterInterface
 
         $this->importState = $importState
             ?? $objectManager->get(ImportStateInterface::class);
+
+        $this->itemPriceAllocator = $itemPriceAllocator
+            ?? $objectManager->get(ItemPriceAllocator::class);
     }
 
     /**
@@ -1257,10 +1271,24 @@ class Importer implements ImporterInterface
         $isWeeeEnabled = $this->weeeHelper->isEnabled($this->getCurrentTargetBaseStore($store));
         $shouldUseItemReferenceAsProductId = $this->orderGeneralConfig->shouldUseItemReferenceAsProductId($store);
 
+        $marketplaceOrder = $this->importState->getCurrentlyImportedMarketplaceOrder();
+
+        $roundingMode = $this->itemPriceAllocator->getMarketplaceRoundingMode(
+            $store,
+            (null !== $marketplaceOrder) ? $marketplaceOrder->getMarketplaceName() : ''
+        );
+
+        if (ItemPriceAllocator::ROUNDING_MODE_UNIT_PRICE !== $roundingMode) {
+            $this->logDebugMessage(sprintf('Using the "%s" rounding mode.', $roundingMode));
+        }
+
+        $itemsQuoteParts = $this->itemPriceAllocator->getItemsQuoteParts($marketplaceItems, $roundingMode);
+
         /** @var MarketplaceItemInterface $marketplaceItem */
-        foreach ($marketplaceItems as $marketplaceItem) {
+        foreach ($marketplaceItems as $itemKey => $marketplaceItem) {
             $reference = $marketplaceItem->getReference();
             $quoteStoreId = $quote->getStoreId();
+            $quoteParts = $itemsQuoteParts[$itemKey];
 
             $this->logDebugMessage(sprintf('Importing the item "%s".', $reference));
 
@@ -1309,24 +1337,44 @@ class Importer implements ImporterInterface
                     );
                 }
 
-                if ($product->getTypeId() === BundleProductType::TYPE_CODE) {
-                    $this->addBundleProductToQuote(
-                        $quote,
-                        $marketplaceItem,
-                        $product,
-                        $isUntaxedBusinessOrder,
-                        $isWeeeEnabled,
-                        $store
+                if ((count($quoteParts) > 1) || (reset($quoteParts) !== $marketplaceItem)) {
+                    $partLabels = array_map(
+                        function (MarketplaceItemInterface $part) {
+                            return sprintf('%d x %.2f', $part->getQuantity(), $part->getPrice());
+                        },
+                        $quoteParts
                     );
-                } else {
-                    $this->addNonParentProductToQuote(
-                        $quote,
-                        $marketplaceItem,
-                        $product,
-                        $isUntaxedBusinessOrder,
-                        $isWeeeEnabled,
-                        $store
+
+                    $this->logDebugMessage(
+                        sprintf(
+                            'Importing the item as %s to preserve the marketplace rounding.',
+                            implode(' + ', $partLabels)
+                        )
                     );
+                }
+
+                foreach ($quoteParts as $marketplaceItemPart) {
+                    $partProduct = clone $product;
+
+                    if ($partProduct->getTypeId() === BundleProductType::TYPE_CODE) {
+                        $this->addBundleProductToQuote(
+                            $quote,
+                            $marketplaceItemPart,
+                            $partProduct,
+                            $isUntaxedBusinessOrder,
+                            $isWeeeEnabled,
+                            $store
+                        );
+                    } else {
+                        $this->addNonParentProductToQuote(
+                            $quote,
+                            $marketplaceItemPart,
+                            $partProduct,
+                            $isUntaxedBusinessOrder,
+                            $isWeeeEnabled,
+                            $store
+                        );
+                    }
                 }
             } catch (LocalizedException $e) {
                 throw new LocalizedException(

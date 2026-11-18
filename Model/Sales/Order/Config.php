@@ -32,6 +32,7 @@ use ShoppingFeed\Manager\Model\Config\Value\HandlerInterface as ValueHandlerInte
 use ShoppingFeed\Manager\Model\Customer\Group\Source as CustomerGroupSource;
 use ShoppingFeed\Manager\Model\Marketplace\Order\Syncing\Action\Source as OrderSyncingActionSource;
 use ShoppingFeed\Manager\Model\Marketplace\Source as MarketplaceSource;
+use ShoppingFeed\Manager\Model\Sales\Order\Item\PriceAllocator as ItemPriceAllocator;
 use ShoppingFeed\Manager\Model\Sales\Order\SyncerInterface as SalesOrderSyncerInterface;
 use ShoppingFeed\Manager\Model\StringHelper;
 
@@ -44,6 +45,10 @@ class Config extends AbstractConfig implements ConfigInterface
     const KEY_CHECK_PRODUCT_AVAILABILITY_AND_OPTIONS = 'check_product_availability_and_options';
     const KEY_CHECK_PRODUCT_WEBSITES = 'check_product_websites';
     const KEY_CHECK_ADDRESS_COUNTRIES = 'check_address_countries';
+    const KEY_CHECK_ORDER_TOTAL = 'check_order_total';
+    const KEY_MARKETPLACE_ROUNDING_MODES = 'marketplace_rounding_modes';
+    const KEY_MARKETPLACE_ROUNDING_MODES__MARKETPLACE = 'marketplace';
+    const KEY_MARKETPLACE_ROUNDING_MODES__ROUNDING_MODE = 'rounding_mode';
     const KEY_SYNC_NON_IMPORTED_ITEMS = 'sync_non_imported_items';
     const KEY_SYNC_NON_IMPORTED_ADDRESSES = 'sync_non_imported_addresses';
     const KEY_IMPORT_CUSTOMERS = 'import_customers';
@@ -439,6 +444,22 @@ class Config extends AbstractConfig implements ConfigInterface
                         'The country of the addresses will not be checked.'
                     ),
                     'sortOrder' => 45,
+                ]
+            ),
+
+            $this->fieldFactory->create(
+                Checkbox::TYPE_CODE,
+                [
+                    'name' => self::KEY_CHECK_ORDER_TOTAL,
+                    'isCheckedByDefault' => false,
+                    'label' => __('Check Order Total'),
+                    'checkedNotice' => __(
+                        'Orders whose total would differ from the total on the marketplace will not be imported.'
+                    ),
+                    'uncheckedNotice' => __(
+                        'Orders whose total would differ from the total on the marketplace will still be imported.'
+                    ),
+                    'sortOrder' => 47,
                 ]
             ),
 
@@ -920,6 +941,27 @@ class Config extends AbstractConfig implements ConfigInterface
             ]
         );
 
+        $roundingModeHandler = $this->valueHandlerFactory->create(
+            OptionHandler::TYPE_CODE,
+            [
+                'dataType' => UiText::NAME,
+                'optionArray' => [
+                    [
+                        'value' => ItemPriceAllocator::ROUNDING_MODE_UNIT_PRICE,
+                        'label' => __('Unit Price'),
+                    ],
+                    [
+                        'value' => ItemPriceAllocator::ROUNDING_MODE_ROW_TOTAL,
+                        'label' => __('Row Total'),
+                    ],
+                    [
+                        'value' => ItemPriceAllocator::ROUNDING_MODE_ORDER_TOTAL,
+                        'label' => __('Order Total'),
+                    ],
+                ],
+            ]
+        );
+
         $defaultAddressImportModeHandler = $this->valueHandlerFactory->create(
             OptionHandler::TYPE_CODE,
             [
@@ -998,6 +1040,37 @@ class Config extends AbstractConfig implements ConfigInterface
 
         return array_merge(
             [
+                $this->fieldFactory->create(
+                    DynamicRows::TYPE_CODE,
+                    [
+                        'name' => self::KEY_MARKETPLACE_ROUNDING_MODES,
+                        'label' => __('Marketplace Rounding Modes'),
+                        'fields' => [
+                            $this->fieldFactory->create(
+                                Select::TYPE_CODE,
+                                [
+                                    'name' => self::KEY_MARKETPLACE_ROUNDING_MODES__MARKETPLACE,
+                                    'valueHandler' => $marketplaceHandler,
+                                    'isRequired' => true,
+                                    'label' => __('Marketplace'),
+                                    'sortOrder' => 10,
+                                ]
+                            ),
+                            $this->fieldFactory->create(
+                                Select::TYPE_CODE,
+                                [
+                                    'name' => self::KEY_MARKETPLACE_ROUNDING_MODES__ROUNDING_MODE,
+                                    'valueHandler' => $roundingModeHandler,
+                                    'isRequired' => true,
+                                    'label' => __('Rounding Mode'),
+                                    'sortOrder' => 20,
+                                ]
+                            ),
+                        ],
+                        'sortOrder' => 48,
+                    ]
+                ),
+
                 $this->fieldFactory->create(
                     DynamicRows::TYPE_CODE,
                     [
@@ -1281,6 +1354,23 @@ class Config extends AbstractConfig implements ConfigInterface
     public function shouldCheckAddressCountries(StoreInterface $store)
     {
         return $this->getFieldValue($store, self::KEY_CHECK_ADDRESS_COUNTRIES);
+    }
+
+    public function shouldCheckOrderTotal(StoreInterface $store)
+    {
+        return $this->getFieldValue($store, self::KEY_CHECK_ORDER_TOTAL);
+    }
+
+    public function getMarketplaceRoundingMode(StoreInterface $store, $marketplace)
+    {
+        return $this->getMarketplaceBasedConfigValue(
+            static::KEY_MARKETPLACE_ROUNDING_MODES,
+            static::KEY_MARKETPLACE_ROUNDING_MODES__MARKETPLACE,
+            static::KEY_MARKETPLACE_ROUNDING_MODES__ROUNDING_MODE,
+            $store,
+            $marketplace,
+            null
+        );
     }
 
     public function shouldSyncNonImportedItems(StoreInterface $store)
