@@ -13,6 +13,7 @@ use Magento\ConfigurableProduct\Model\Product\Type\Configurable as ConfigurableP
 use Magento\Framework\Stdlib\DateTime\TimezoneInterface as TimezoneInterface;
 use Magento\Store\Model\StoreManagerInterface;
 use Magento\Tax\Api\TaxCalculationInterface as TaxCalculationInterface;
+use Magento\Tax\Model\Calculation as TaxCalculation;
 use Magento\Tax\Model\Config as TaxConfig;
 use Magento\Weee\Model\Config as WeeeConfig;
 use ShoppingFeed\Feed\Product\AbstractProduct as AbstractExportedProduct;
@@ -38,6 +39,7 @@ class Prices extends AbstractAdapter implements PricesInterface
     const KEY_SPECIAL_PRICE_TO_DATE = 'special_price_to_date';
     const KEY_VAT = 'vat';
     const KEY_ECOTAX = 'ecotax';
+    const KEY_TAX_RATE = 'tax_rate';
 
     /**
      * @var CatalogProductResourceFactory
@@ -318,6 +320,8 @@ class Prices extends AbstractAdapter implements PricesInterface
                 self::KEY_SPECIAL_PRICE_FROM_DATE => $this->getDateValue($store, $product, 'special_from_date'),
                 self::KEY_SPECIAL_PRICE_TO_DATE => $this->getDateValue($store, $product, 'special_to_date'),
                 self::KEY_VAT => round($taxAmount, 2),
+                // Required to discount the children of bundle products the same way as Magento.
+                self::KEY_TAX_RATE => (float) $taxRate,
             ];
 
             if (
@@ -516,44 +520,191 @@ class Prices extends AbstractAdapter implements PricesInterface
             return $bundleData;
         }
 
-        $basePrice = 0.0;
-        $finalPrice = 0.0;
-        $taxAmount = 0.0;
+        // The special price and tier price of bundle products are percentages.
+        $specialPercentage = (float) ($bundleData[self::KEY_SPECIAL_PRICE] ?? 0.0);
+        $tierPercentage = (float) ($bundleData[self::KEY_TIER_PRICE] ?? 0.0);
+        $isDiscounted = ($specialPercentage > 0.0) || ($tierPercentage > 0.0);
+
+        $baseLines = [];
+        $finalLines = [];
         $ecotaxAmount = 0.0;
 
         foreach ($childrenData as $key => $childData) {
             $bundledQuantity = max(1, $childrenQuantities[$key] ?? 0);
-            $basePrice += ((float) ($childData[self::KEY_BASE_PRICE] ?? 0.0)) * $bundledQuantity;
-            $finalPrice += ((float) ($childData[self::KEY_FINAL_PRICE] ?? 0.0)) * $bundledQuantity;
-            $taxAmount += ((float) ($childData[self::KEY_VAT] ?? 0.0)) * $bundledQuantity;
+            $taxRate = $this->getBundleChildTaxRate($childData);
+
+            $baseUnitPrice = $this->getBundleChildCatalogPrice(
+                $store,
+                (float) ($childData[self::KEY_BASE_PRICE] ?? 0.0),
+                $taxRate
+            );
+
+            $finalUnitPrice = $this->getBundleChildCatalogPrice(
+                $store,
+                (float) ($childData[self::KEY_FINAL_PRICE] ?? 0.0),
+                $taxRate
+            );
+
+            if ($isDiscounted) {
+                $finalUnitPrice = $this->getBundleChildDiscountedPrice(
+                    $finalUnitPrice,
+                    $specialPercentage,
+                    $tierPercentage
+                );
+            }
+
+            $baseLines[] = [ $baseUnitPrice, $bundledQuantity, $taxRate ];
+            $finalLines[] = [ $finalUnitPrice, $bundledQuantity, $taxRate ];
             $ecotaxAmount += ((float) ($childData[self::KEY_ECOTAX] ?? 0.0)) * $bundledQuantity;
         }
 
-        // As in Magento, the special price and tier price discounts do not stack: only the best one applies.
-        $discountRatio = 1.0;
-
-        if (($bundleData[self::KEY_SPECIAL_PRICE] ?? 0.0) > 0.0) {
-            $discountRatio = min($discountRatio, $bundleData[self::KEY_SPECIAL_PRICE] / 100);
-        }
-
-        if (($bundleData[self::KEY_TIER_PRICE] ?? 0.0) > 0.0) {
-            $discountRatio = min($discountRatio, 1 - $bundleData[self::KEY_TIER_PRICE] / 100);
-        }
-
-        // As in Magento, prices can not go below zero.
-        $discountRatio = max(0.0, $discountRatio);
-
-        if ($discountRatio < 1.0) {
-            $finalPrice = $finalPrice * $discountRatio;
-            $taxAmount = $taxAmount * $discountRatio;
-        }
+        list ($basePrice) = $this->getBundleChildrenTotalPrices($store, $baseLines);
+        list ($finalPrice, $taxAmount) = $this->getBundleChildrenTotalPrices($store, $finalLines);
 
         $bundleData[self::KEY_BASE_PRICE] = $basePrice;
         $bundleData[self::KEY_FINAL_PRICE] = $finalPrice;
         $bundleData[self::KEY_VAT] = $taxAmount;
-        $bundleData[self::KEY_ECOTAX] = $ecotaxAmount;
+        $bundleData[self::KEY_ECOTAX] = round($ecotaxAmount, 2);
 
         return $bundleData;
+    }
+
+    /**
+     * @param array $childData
+     * @return float
+     */
+    private function getBundleChildTaxRate(array $childData)
+    {
+        if (isset($childData[self::KEY_TAX_RATE])) {
+            return (float) $childData[self::KEY_TAX_RATE];
+        }
+
+        $finalPrice = (float) ($childData[self::KEY_FINAL_PRICE] ?? 0.0);
+        $taxAmount = (float) ($childData[self::KEY_VAT] ?? 0.0);
+
+        // The tax rate is missing from the data refreshed by previous versions: approximate it.
+        return ($finalPrice > $taxAmount) ? ($taxAmount / ($finalPrice - $taxAmount) * 100) : 0.0;
+    }
+
+    /**
+     * Returns the unit price of a bundle child as it was entered in the catalog, including or excluding tax.
+     * This is the price that Magento discounts and rounds.
+     *
+     * @param StoreInterface $store
+     * @param float $price The unit price of the child, including tax.
+     * @param float $taxRate
+     * @return float
+     */
+    private function getBundleChildCatalogPrice(StoreInterface $store, $price, $taxRate)
+    {
+        if ($store->getScopeConfigValue(TaxConfig::CONFIG_XML_PATH_PRICE_INCLUDES_TAX)) {
+            return $price;
+        }
+
+        // This gives back the price excluding tax that was entered, as long as it had at most 2 decimals.
+        return round($price / (1 + $taxRate / 100), 2);
+    }
+
+    /**
+     * Applies the discount of a bundle product on the unit price of one of its children, rounded as Magento does.
+     *
+     * @see \Magento\Bundle\Model\Product\Price::getLowestPrice()
+     * @param float $price
+     * @param float $specialPercentage
+     * @param float $tierPercentage
+     * @return float
+     */
+    private function getBundleChildDiscountedPrice($price, $specialPercentage, $tierPercentage)
+    {
+        // As in Magento, the special price and tier price discounts do not stack: only the best one applies.
+        $discountedPrice = $price;
+
+        if ($specialPercentage > 0.0) {
+            $discountedPrice = min($discountedPrice, $price * ($specialPercentage / 100));
+        }
+
+        if ($tierPercentage > 0.0) {
+            $discountedPrice = min($discountedPrice, $price - $price * ($tierPercentage / 100));
+        }
+
+        // As in Magento, prices can not go below zero.
+        return round(max(0.0, $discountedPrice), 2);
+    }
+
+    /**
+     * @see \Magento\Tax\Model\Calculation::calcTaxAmount()
+     * @param float $price
+     * @param float $taxRate
+     * @param bool $isPriceIncludingTax
+     * @return float The unrounded tax amount.
+     */
+    private function getExactTaxAmount($price, $taxRate, $isPriceIncludingTax)
+    {
+        $taxRate = $taxRate / 100;
+
+        return $isPriceIncludingTax ? ($price * (1 - 1 / (1 + $taxRate))) : ($price * $taxRate);
+    }
+
+    /**
+     * @see \Magento\Tax\Model\Calculation\AbstractCalculator::deltaRound()
+     * @param float $taxAmount
+     * @return float
+     */
+    private function roundTaxAmount($taxAmount)
+    {
+        // As in Magento, a tiny initial delta makes the rounding of half cents deterministic.
+        return ($taxAmount != 0.0) ? round($taxAmount + 0.000001, 2) : 0.0;
+    }
+
+    /**
+     * Returns the price (including tax) and tax amount of a set of bundled children, as computed in a Magento cart.
+     * Unit prices are given as they are entered in the catalog (including or excluding tax), and already rounded.
+     * As in Magento, the tax amount is rounded per unit, per row or for the whole bundle, depending on the store.
+     *
+     * @see \Magento\Tax\Model\Calculation\UnitBaseCalculator
+     * @see \Magento\Tax\Model\Calculation\RowBaseCalculator
+     * @see \Magento\Tax\Model\Calculation\TotalBaseCalculator
+     * @param StoreInterface $store
+     * @param array $lines A list of [ unit price, quantity, tax rate ].
+     * @return float[]
+     */
+    private function getBundleChildrenTotalPrices(StoreInterface $store, array $lines)
+    {
+        $isPriceIncludingTax = (bool) $store->getScopeConfigValue(TaxConfig::CONFIG_XML_PATH_PRICE_INCLUDES_TAX);
+        $algorithm = $store->getScopeConfigValue(TaxConfig::XML_PATH_ALGORITHM);
+
+        $rowTotal = 0.0;
+        $taxAmount = 0.0;
+        $exactTaxAmounts = [];
+
+        foreach ($lines as list($unitPrice, $quantity, $taxRate)) {
+            $lineTotal = $unitPrice * $quantity;
+            $rowTotal += $lineTotal;
+
+            if (TaxCalculation::CALC_UNIT_BASE === $algorithm) {
+                $unitTaxAmount = $this->getExactTaxAmount($unitPrice, $taxRate, $isPriceIncludingTax);
+                $taxAmount += $this->roundTaxAmount($unitTaxAmount) * $quantity;
+            } elseif (TaxCalculation::CALC_ROW_BASE === $algorithm) {
+                $taxAmount += $this->roundTaxAmount(
+                    $this->getExactTaxAmount($lineTotal, $taxRate, $isPriceIncludingTax)
+                );
+            } else {
+                // Rounding deltas are carried over from one row to the next (per tax rate),
+                // so that the tax amount of the bundle is the rounded sum of the exact tax amounts.
+                $rateKey = (string) $taxRate;
+                $exactTaxAmounts[$rateKey] = ($exactTaxAmounts[$rateKey] ?? 0.0)
+                    + $this->getExactTaxAmount($lineTotal, $taxRate, $isPriceIncludingTax);
+            }
+        }
+
+        foreach ($exactTaxAmounts as $exactTaxAmount) {
+            $taxAmount += $this->roundTaxAmount($exactTaxAmount);
+        }
+
+        $totalPrice = $isPriceIncludingTax ? $rowTotal : ($rowTotal + $taxAmount);
+
+        // The amounts are sums of rounded amounts: only floating-point errors remain to be removed.
+        return [ round($totalPrice, 2), round($taxAmount, 2) ];
     }
 
     public function exportBaseProductData(
