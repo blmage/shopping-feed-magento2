@@ -2,11 +2,14 @@
 
 namespace ShoppingFeed\Manager\Ui\Component\Listing\Column\Marketplace\Order;
 
+use Magento\Framework\App\ObjectManager;
+use Magento\Framework\Phrase;
 use Magento\Framework\View\Element\UiComponent\ContextInterface;
 use Magento\Framework\View\Element\UiComponentFactory;
 use Magento\Ui\Component\Listing\Columns\Column as Column;
 use ShoppingFeed\Manager\Api\Data\Account\StoreInterface;
 use ShoppingFeed\Manager\Api\Data\Marketplace\OrderInterface;
+use ShoppingFeed\Manager\Model\Marketplace\Order\ImportabilityChecker;
 use ShoppingFeed\Manager\Model\Sales\Order\ConfigInterface as OrderConfigInterface;
 use ShoppingFeed\Manager\Model\ResourceModel\Account\Store\Collection as StoreCollection;
 use ShoppingFeed\Manager\Model\ResourceModel\Account\Store\CollectionFactory as StoreCollectionFactory;
@@ -24,17 +27,18 @@ abstract class AbstractColumn extends Column
     static private $storeCollection = null;
 
     /**
-     * @var OrderConfigInterface
+     * @var ImportabilityChecker
      */
-    private $orderGeneralConfig;
+    private $importabilityChecker;
 
     /**
      * @param ContextInterface $context
      * @param UiComponentFactory $uiComponentFactory
      * @param StoreCollectionFactory $storeCollectionFactory
-     * @param OrderConfigInterface $orderGeneralConfig
+     * @param OrderConfigInterface $orderGeneralConfig Unused, kept for compatibility.
      * @param array $components
      * @param array $data
+     * @param ImportabilityChecker|null $importabilityChecker
      */
     public function __construct(
         ContextInterface $context,
@@ -42,10 +46,14 @@ abstract class AbstractColumn extends Column
         StoreCollectionFactory $storeCollectionFactory,
         OrderConfigInterface $orderGeneralConfig,
         array $components = [],
-        array $data = []
+        array $data = [],
+        ?ImportabilityChecker $importabilityChecker = null
     ) {
         $this->storeCollectionFactory = $storeCollectionFactory;
-        $this->orderGeneralConfig = $orderGeneralConfig;
+
+        $this->importabilityChecker = $importabilityChecker
+            ?? ObjectManager::getInstance()->get(ImportabilityChecker::class);
+
         parent::__construct($context, $uiComponentFactory, $components, $data);
     }
 
@@ -73,119 +81,39 @@ abstract class AbstractColumn extends Column
     }
 
     /**
-     * @param int $storeId
-     * @param string $shoppingFeedStatus
-     * @param bool $isTest
-     * @param bool $isFulfilled
-     * @param int $salesOrderId
-     * @param \DateTime $createdAt
+     * @param array $item
      * @return bool
      */
-    private function isImportableOrderData(
-        $storeId,
-        $shoppingFeedStatus,
-        $isTest,
-        $isFulfilled,
-        $salesOrderId,
-        \DateTime $createdAt
-    ) {
-        if (!empty($salesOrderId)) {
-            return false;
-        }
-
-        /** @var StoreInterface $store */
-        $store = $this->getStoreCollection()->getItemById($storeId);
-
-        if (!$store instanceof StoreInterface) {
-            return false;
-        }
-
-        if ($createdAt < $this->orderGeneralConfig->getOrderImportFromDate($store)) {
-            return false;
-        }
-
-        if ($isTest) {
-            if (!$this->orderGeneralConfig->shouldImportTestOrders($store)) {
-                return false;
-            }
-        } elseif (!$this->orderGeneralConfig->shouldImportLiveOrders($store)) {
-            return false;
-        }
-
-        $isShipped = ($shoppingFeedStatus === OrderInterface::STATUS_SHIPPED);
-
-        if ($isFulfilled) {
-            return $isShipped && $this->orderGeneralConfig->shouldImportFulfilledOrders($store);
-        }
-
-        if ($isShipped) {
-            return $this->orderGeneralConfig->shouldImportShippedOrders($store);
-        }
-
-        return (OrderInterface::STATUS_WAITING_SHIPMENT === $shoppingFeedStatus);
+    private function hasImportabilityData(array $item)
+    {
+        return isset($item[OrderInterface::STORE_ID])
+            && isset($item[OrderInterface::SHOPPING_FEED_STATUS])
+            && isset($item[OrderInterface::IS_FULFILLED])
+            && array_key_exists(OrderInterface::SALES_ORDER_ID, $item)
+            && isset($item[OrderInterface::CREATED_AT]);
     }
 
     /**
-     * @param int $storeId
-     * @param string $shoppingFeedStatus
-     * @param bool $isTest
-     * @param bool $isFulfilled
-     * @param int $salesOrderId
-     * @param \DateTime $createdAt
-     * @return string|null
+     * @param array $item
+     * @return Phrase|null The reason why the order can not be imported, or null if it can.
      */
-    private function getNonImportableOrderDataReason(
-        $storeId,
-        $shoppingFeedStatus,
-        $isTest,
-        $isFulfilled,
-        $salesOrderId,
-        \DateTime $createdAt
-    ) {
-        if (!empty($salesOrderId)) {
-            return __('already imported');
-        }
-
+    private function getNonImportableOrderItemReason(array $item)
+    {
         /** @var StoreInterface $store */
-        $store = $this->getStoreCollection()->getItemById($storeId);
+        $store = $this->getStoreCollection()->getItemById((int) $item[OrderInterface::STORE_ID]);
 
         if (!$store instanceof StoreInterface) {
             return __('unexisting account');
         }
 
-        if ($createdAt < $this->orderGeneralConfig->getOrderImportFromDate($store)) {
-            return __('too old');
-        }
-
-        if ($isTest) {
-            if (!$this->orderGeneralConfig->shouldImportTestOrders($store)) {
-                return __('import of test orders is disabled');
-            }
-        } elseif (!$this->orderGeneralConfig->shouldImportLiveOrders($store)) {
-            return __('import of live orders is disabled');
-        }
-
-        $isShipped = ($shoppingFeedStatus === OrderInterface::STATUS_SHIPPED);
-
-        if ($isFulfilled) {
-            if (!$this->orderGeneralConfig->shouldImportFulfilledOrders($store)) {
-                return __('import of fulfilled orders is disabled');
-            } elseif (!$isShipped) {
-                return __('status is not "shipped"');
-            }
-        }
-
-        if ($isShipped) {
-            if (!$this->orderGeneralConfig->shouldImportShippedOrders($store)) {
-                return __('import of shipped orders is disabled');
-            }
-        }
-
-        if (OrderInterface::STATUS_WAITING_SHIPMENT !== $shoppingFeedStatus) {
-            return __('status is not "waiting_shipment"');
-        }
-
-        return null;
+        return $this->importabilityChecker->getNonImportableReason(
+            $store,
+            trim($item[OrderInterface::SHOPPING_FEED_STATUS] ?? ''),
+            $this->isTestOrderData($item),
+            (bool) $item[OrderInterface::IS_FULFILLED],
+            (int) $item[OrderInterface::SALES_ORDER_ID],
+            \DateTime::createFromFormat('Y-m-d H:i:s', $item[OrderInterface::CREATED_AT])
+        );
     }
 
     /**
@@ -194,21 +122,8 @@ abstract class AbstractColumn extends Column
      */
     public function isImportableOrderItem(array $item)
     {
-        if (
-            isset($item[OrderInterface::STORE_ID])
-            && isset($item[OrderInterface::SHOPPING_FEED_STATUS])
-            && isset($item[OrderInterface::IS_FULFILLED])
-            && array_key_exists(OrderInterface::SALES_ORDER_ID, $item)
-            && isset($item[OrderInterface::CREATED_AT])
-        ) {
-            return $this->isImportableOrderData(
-                (int) $item[OrderInterface::STORE_ID],
-                trim($item[OrderInterface::SHOPPING_FEED_STATUS] ?? ''),
-                $this->isTestOrderData($item),
-                (bool) $item[OrderInterface::IS_FULFILLED],
-                (int) $item[OrderInterface::SALES_ORDER_ID],
-                \DateTime::createFromFormat('Y-m-d H:i:s', $item[OrderInterface::CREATED_AT])
-            );
+        if ($this->hasImportabilityData($item)) {
+            return null === $this->getNonImportableOrderItemReason($item);
         }
 
         return null;
@@ -220,36 +135,10 @@ abstract class AbstractColumn extends Column
      */
     public function getOrderItemImportableStatus(array $item)
     {
-        if (
-            isset($item[OrderInterface::STORE_ID])
-            && isset($item[OrderInterface::SHOPPING_FEED_STATUS])
-            && isset($item[OrderInterface::IS_FULFILLED])
-            && array_key_exists(OrderInterface::SALES_ORDER_ID, $item)
-            && isset($item[OrderInterface::CREATED_AT])
-        ) {
-            $isImportable = $this->isImportableOrderData(
-                (int) $item[OrderInterface::STORE_ID],
-                trim($item[OrderInterface::SHOPPING_FEED_STATUS] ?? ''),
-                $this->isTestOrderData($item),
-                (bool) $item[OrderInterface::IS_FULFILLED],
-                (int) $item[OrderInterface::SALES_ORDER_ID],
-                \DateTime::createFromFormat('Y-m-d H:i:s', $item[OrderInterface::CREATED_AT])
-            );
+        if ($this->hasImportabilityData($item)) {
+            $reason = $this->getNonImportableOrderItemReason($item);
 
-            if ($isImportable) {
-                return (string) __('Yes');
-            }
-
-            $reason = $this->getNonImportableOrderDataReason(
-                (int) $item[OrderInterface::STORE_ID],
-                trim($item[OrderInterface::SHOPPING_FEED_STATUS] ?? ''),
-                $this->isTestOrderData($item),
-                (bool) $item[OrderInterface::IS_FULFILLED],
-                (int) $item[OrderInterface::SALES_ORDER_ID],
-                \DateTime::createFromFormat('Y-m-d H:i:s', $item[OrderInterface::CREATED_AT])
-            );
-
-            return (string) __('No (%1)', $reason);
+            return (null === $reason) ? (string) __('Yes') : (string) __('No (%1)', $reason);
         }
 
         return (string) __('Undetermined (missing data)');

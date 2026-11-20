@@ -72,7 +72,9 @@ class Config extends AbstractConfig implements ConfigInterface
     const KEY_FORCE_CROSS_BORDER_TRADE = 'force_border_trade';
     const KEY_CREATE_INVOICE = 'create_invoice';
     const KEY_IMPORT_FULFILLED_ORDERS = 'import_fulfilled_orders';
+    const KEY_IMPORT_PARTIALLY_SHIPPED_FULFILLED_ORDERS = 'import_partially_shipped_fulfilled_orders';
     const KEY_CREATE_FULFILMENT_SHIPMENT = 'create_fulfilment_shipment';
+    const KEY_CREATE_PARTIAL_FULFILMENT_SHIPMENTS = 'create_partial_fulfilment_shipments';
     const KEY_IMPORT_SHIPPED_ORDERS = 'import_shipped_orders';
     const KEY_CREATE_SHIPPED_SHIPMENT = 'create_shipped_shipment';
     const KEY_NEW_ORDER_STATUS = 'new_order_status';
@@ -87,6 +89,7 @@ class Config extends AbstractConfig implements ConfigInterface
     const KEY_ORDER_REFUSAL_SYNCING_ACTION = 'order_refusal_syncing_action';
     const KEY_ORDER_CANCELLATION_SYNCING_ACTION = 'order_cancellation_syncing_action';
     const KEY_ORDER_REFUND_SYNCING_ACTION = 'order_refund_syncing_action';
+    const KEY_ORDER_PARTIAL_REFUND_SYNCING_ACTION = 'order_partial_refund_syncing_action';
     const KEY_SHOULD_SYNC_PARTIAL_SHIPMENTS = 'should_sync_partial_shipments';
     const KEY_SHIPMENT_SYNCING_MAXIMUM_DELAY = 'shipment_syncing_maximum_delay';
     const KEY_SYNC_DELIVERED_ORDERS = 'sync_delivered_orders';
@@ -294,6 +297,28 @@ class Config extends AbstractConfig implements ConfigInterface
                 'dataType' => UiText::NAME,
                 'hasEmptyOption' => true,
                 'optionArray' => $this->orderSyncingActionSource->toOptionArray(),
+            ]
+        );
+
+        $orderPartialRefundSyncingActions = [
+            SalesOrderSyncerInterface::SYNCING_ACTION_NONE,
+            SalesOrderSyncerInterface::SYNCING_ACTION_HOLD,
+            SalesOrderSyncerInterface::SYNCING_ACTION_REFUND,
+        ];
+
+        $orderPartialRefundSyncingActionHandler = $this->valueHandlerFactory->create(
+            OptionHandler::TYPE_CODE,
+            [
+                'dataType' => UiText::NAME,
+                'hasEmptyOption' => true,
+                'optionArray' => array_values(
+                    array_filter(
+                        $this->orderSyncingActionSource->toOptionArray(),
+                        function (array $option) use ($orderPartialRefundSyncingActions) {
+                            return in_array($option['value'], $orderPartialRefundSyncingActions, true);
+                        }
+                    )
+                ),
             ]
         );
 
@@ -642,7 +667,27 @@ class Config extends AbstractConfig implements ConfigInterface
                     'isCheckedByDefault' => false,
                     'label' => __('Import Fulfilled Orders'),
                     'sortOrder' => 260,
-                    'checkedDependentFieldNames' => [ self::KEY_CREATE_FULFILMENT_SHIPMENT ],
+                    'checkedDependentFieldNames' => [
+                        self::KEY_IMPORT_PARTIALLY_SHIPPED_FULFILLED_ORDERS,
+                        self::KEY_CREATE_FULFILMENT_SHIPMENT,
+                    ],
+                ]
+            ),
+
+            $this->fieldFactory->create(
+                Checkbox::TYPE_CODE,
+                [
+                    'name' => self::KEY_IMPORT_PARTIALLY_SHIPPED_FULFILLED_ORDERS,
+                    'isCheckedByDefault' => false,
+                    'label' => __('Import Partially Shipped Fulfilled Orders'),
+                    'checkedNotice' => __(
+                        'Orders fulfilled by the marketplaces will be imported as soon as they are partially shipped.'
+                    ),
+                    'uncheckedNotice' => __(
+                        'Orders fulfilled by the marketplaces will only be imported once fully shipped.'
+                    ),
+                    'checkedDependentFieldNames' => [ self::KEY_CREATE_PARTIAL_FULFILMENT_SHIPMENTS ],
+                    'sortOrder' => 265,
                 ]
             ),
 
@@ -659,6 +704,22 @@ class Config extends AbstractConfig implements ConfigInterface
                         'Orders fulfilled by the marketplaces will not be shipped automatically.'
                     ),
                     'sortOrder' => 270,
+                ]
+            ),
+
+            $this->fieldFactory->create(
+                Checkbox::TYPE_CODE,
+                [
+                    'name' => self::KEY_CREATE_PARTIAL_FULFILMENT_SHIPMENTS,
+                    'isCheckedByDefault' => false,
+                    'label' => __('Create Partial Shipments for Fulfilled Orders'),
+                    'checkedNotice' => __(
+                        'Orders fulfilled by the marketplaces will be shipped item by item, as the marketplaces ship them.'
+                    ),
+                    'uncheckedNotice' => __(
+                        'Orders fulfilled by the marketplaces will be shipped entirely upon import.'
+                    ),
+                    'sortOrder' => 275,
                 ]
             ),
 
@@ -783,6 +844,22 @@ class Config extends AbstractConfig implements ConfigInterface
                     'label' => __('Synchronization Action in Case of Refund on the Marketplace'),
                     'notice' => __('The action will only be applied if it is compatible with the order state.'),
                     'sortOrder' => 390,
+                ]
+            ),
+
+            $this->fieldFactory->create(
+                Select::TYPE_CODE,
+                [
+                    'name' => self::KEY_ORDER_PARTIAL_REFUND_SYNCING_ACTION,
+                    'valueHandler' => $orderPartialRefundSyncingActionHandler,
+                    'isRequired' => true,
+                    'defaultFormValue' => SalesOrderSyncerInterface::SYNCING_ACTION_NONE,
+                    'defaultUseValue' => SalesOrderSyncerInterface::SYNCING_ACTION_NONE,
+                    'label' => __('Synchronization Action in Case of Partial Refund on the Marketplace'),
+                    'notice' => __(
+                        'Only refunded items can be refunded automatically, without shipping fees. Other partial refunds block the order.'
+                    ),
+                    'sortOrder' => 395,
                 ]
             ),
 
@@ -1491,9 +1568,23 @@ class Config extends AbstractConfig implements ConfigInterface
         return $this->getFieldValue($store, self::KEY_IMPORT_FULFILLED_ORDERS);
     }
 
+    public function shouldImportPartiallyShippedFulfilledOrders(StoreInterface $store)
+    {
+        return $this->shouldImportFulfilledOrders($store)
+            && $this->getFieldValue($store, self::KEY_IMPORT_PARTIALLY_SHIPPED_FULFILLED_ORDERS);
+    }
+
     public function shouldCreateFulfilmentShipment(StoreInterface $store)
     {
         return $this->getFieldValue($store, self::KEY_CREATE_FULFILMENT_SHIPMENT);
+    }
+
+    public function shouldCreatePartialFulfilmentShipments(StoreInterface $store)
+    {
+        // Orders imported once fully shipped have nothing to ship item by item.
+        return $this->shouldImportPartiallyShippedFulfilledOrders($store)
+            && $this->shouldCreateFulfilmentShipment($store)
+            && $this->getFieldValue($store, self::KEY_CREATE_PARTIAL_FULFILMENT_SHIPMENTS);
     }
 
     public function shouldImportShippedOrders(StoreInterface $store)
@@ -1585,6 +1676,11 @@ class Config extends AbstractConfig implements ConfigInterface
     public function getOrderRefundSyncingAction(StoreInterface $store)
     {
         return $this->getFieldValue($store, self::KEY_ORDER_REFUND_SYNCING_ACTION);
+    }
+
+    public function getOrderPartialRefundSyncingAction(StoreInterface $store)
+    {
+        return $this->getFieldValue($store, self::KEY_ORDER_PARTIAL_REFUND_SYNCING_ACTION);
     }
 
     public function shouldSyncPartialShipments(StoreInterface $store)

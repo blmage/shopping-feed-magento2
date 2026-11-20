@@ -44,6 +44,7 @@ use ShoppingFeed\Manager\Api\Data\Marketplace\OrderInterface as MarketplaceOrder
 use ShoppingFeed\Manager\Api\Data\Shipping\Method\RuleInterface as ShippingMethodRuleInterface;
 use ShoppingFeed\Manager\Api\Marketplace\OrderRepositoryInterface as MarketplaceOrderRepositoryInterface;
 use ShoppingFeed\Manager\DB\TransactionFactory;
+use ShoppingFeed\Manager\Model\Marketplace\Order\ImportabilityChecker as MarketplaceOrderImportabilityChecker;
 use ShoppingFeed\Manager\Model\Marketplace\Order\Manager as MarketplaceOrderManager;
 use ShoppingFeed\Manager\Model\ResourceModel\Marketplace\Order\Address\CollectionFactory as MarketplaceAddressCollectionFactory;
 use ShoppingFeed\Manager\Model\ResourceModel\Marketplace\Order\Item\CollectionFactory as MarketplaceItemCollectionFactory;
@@ -240,6 +241,11 @@ class Importer implements ImporterInterface
     private $importState;
 
     /**
+     * @var MarketplaceOrderImportabilityChecker
+     */
+    private $marketplaceOrderImportabilityChecker;
+
+    /**
      * @var BaseStore|null
      */
     private $currentTargetBaseStore = null;
@@ -281,6 +287,10 @@ class Importer implements ImporterInterface
      * @param MarketplaceAddressCollectionFactory $marketplaceAddressCollectionFactory
      * @param MarketplaceItemCollectionFactory $marketplaceItemCollectionFactory
      * @param SalesShipmentFactory|null $salesShipmentFactory
+     * @param SalesRuleApplier|null $salesRuleApplier
+     * @param SalesOrderRepositoryInterface|null $salesOrderRepository
+     * @param ImportStateInterface|null $importState
+     * @param MarketplaceOrderImportabilityChecker|null $marketplaceOrderImportabilityChecker
      */
     public function __construct(
         LoggerInterface $logger,
@@ -316,7 +326,8 @@ class Importer implements ImporterInterface
         ?SalesShipmentFactory $salesShipmentFactory = null,
         ?SalesRuleApplier $salesRuleApplier = null,
         ?SalesOrderRepositoryInterface $salesOrderRepository = null,
-        ?ImportStateInterface $importState = null
+        ?ImportStateInterface $importState = null,
+        ?MarketplaceOrderImportabilityChecker $marketplaceOrderImportabilityChecker = null
     ) {
         $this->logger = $logger;
         $this->transactionFactory = $transactionFactory;
@@ -362,6 +373,9 @@ class Importer implements ImporterInterface
 
         $this->importState = $importState
             ?? $objectManager->get(ImportStateInterface::class);
+
+        $this->marketplaceOrderImportabilityChecker = $marketplaceOrderImportabilityChecker
+            ?? $objectManager->get(MarketplaceOrderImportabilityChecker::class);
     }
 
     /**
@@ -411,35 +425,7 @@ class Importer implements ImporterInterface
      */
     public function isImportableStoreOrder(MarketplaceOrderInterface $order, StoreInterface $store)
     {
-        if (!empty($order->getSalesOrderId())) {
-            return false;
-        }
-
-        $createdAt = \DateTime::createFromFormat('Y-m-d H:i:s', $order->getCreatedAt());
-
-        if ($createdAt < $this->orderGeneralConfig->getOrderImportFromDate($store)) {
-            return false;
-        }
-
-        if ($order->isTest()) {
-            if (!$this->orderGeneralConfig->shouldImportTestOrders($store)) {
-                return false;
-            }
-        } elseif (!$this->orderGeneralConfig->shouldImportLiveOrders($store)) {
-            return false;
-        }
-
-        $isShipped = ($order->getShoppingFeedStatus() === MarketplaceOrderInterface::STATUS_SHIPPED);
-
-        if ($order->isFulfilled()) {
-            return $isShipped && $this->orderGeneralConfig->shouldImportFulfilledOrders($store);
-        }
-
-        if ($isShipped) {
-            return $this->orderGeneralConfig->shouldImportShippedOrders($store);
-        }
-
-        return ($order->getShoppingFeedStatus() === MarketplaceOrderInterface::STATUS_WAITING_SHIPMENT);
+        return $this->marketplaceOrderImportabilityChecker->isImportableOrder($order, $store);
     }
 
     public function getOrderTargetBaseStore(

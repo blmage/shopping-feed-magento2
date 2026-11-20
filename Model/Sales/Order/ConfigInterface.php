@@ -222,7 +222,19 @@ interface ConfigInterface extends BaseConfig
      * @param StoreInterface $store
      * @return bool
      */
+    public function shouldImportPartiallyShippedFulfilledOrders(StoreInterface $store);
+
+    /**
+     * @param StoreInterface $store
+     * @return bool
+     */
     public function shouldCreateFulfilmentShipment(StoreInterface $store);
+
+    /**
+     * @param StoreInterface $store
+     * @return bool
+     */
+    public function shouldCreatePartialFulfilmentShipments(StoreInterface $store);
 
     /**
      * @param StoreInterface $store
@@ -316,6 +328,12 @@ interface ConfigInterface extends BaseConfig
      * @return string
      */
     public function getOrderRefundSyncingAction(StoreInterface $store);
+
+    /**
+     * @param StoreInterface $store
+     * @return string
+     */
+    public function getOrderPartialRefundSyncingAction(StoreInterface $store);
 
     /**
      * @param StoreInterface $store

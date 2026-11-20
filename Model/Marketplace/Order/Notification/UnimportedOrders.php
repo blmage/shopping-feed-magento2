@@ -3,12 +3,13 @@
 namespace ShoppingFeed\Manager\Model\Marketplace\Order\Notification;
 
 use Magento\Framework\App\CacheInterface;
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\AuthorizationInterface;
 use Magento\Framework\Notification\MessageInterface;
 use Magento\Framework\Serialize\SerializerInterface;
 use Magento\Framework\UrlInterface;
-use ShoppingFeed\Manager\Api\Data\Account\StoreInterface;
 use ShoppingFeed\Manager\Api\Data\Marketplace\OrderInterface;
+use ShoppingFeed\Manager\Model\Marketplace\Order\ImportabilityChecker;
 use ShoppingFeed\Manager\Model\ResourceModel\Account\Store\CollectionFactory as StoreCollectionFactory;
 use ShoppingFeed\Manager\Model\ResourceModel\Marketplace\Order\CollectionFactory as OrderCollectionFactory;
 use ShoppingFeed\Manager\Model\ResourceModel\Marketplace\Order\Grid\Collection as OrderGridCollection;
@@ -56,6 +57,11 @@ class UnimportedOrders implements MessageInterface
     private $orderGeneralConfig;
 
     /**
+     * @var ImportabilityChecker
+     */
+    private $importabilityChecker;
+
+    /**
      * @var int[]|null
      */
     private $unimportedOrderIds = null;
@@ -68,6 +74,7 @@ class UnimportedOrders implements MessageInterface
      * @param StoreCollectionFactory $storeCollectionFactory
      * @param OrderCollectionFactory $orderCollectionFactory
      * @param OrderConfigInterface $orderGeneralConfig
+     * @param ImportabilityChecker|null $importabilityChecker
      */
     public function __construct(
         AuthorizationInterface $authorization,
@@ -76,7 +83,8 @@ class UnimportedOrders implements MessageInterface
         UrlInterface $urlBuilder,
         StoreCollectionFactory $storeCollectionFactory,
         OrderCollectionFactory $orderCollectionFactory,
-        OrderConfigInterface $orderGeneralConfig
+        OrderConfigInterface $orderGeneralConfig,
+        ?ImportabilityChecker $importabilityChecker = null
     ) {
         $this->authorization = $authorization;
         $this->serializer = $serializer;
@@ -85,49 +93,14 @@ class UnimportedOrders implements MessageInterface
         $this->storeCollectionFactory = $storeCollectionFactory;
         $this->orderCollectionFactory = $orderCollectionFactory;
         $this->orderGeneralConfig = $orderGeneralConfig;
+
+        $this->importabilityChecker = $importabilityChecker
+            ?? ObjectManager::getInstance()->get(ImportabilityChecker::class);
     }
 
     public function getIdentity()
     {
         return hash('sha256', 'sfm_unimported_marketplace_orders');
-    }
-
-    /**
-     * @param OrderInterface $order
-     * @param StoreInterface $store
-     * @return bool
-     */
-    private function isImportableStoreOrder(OrderInterface $order, StoreInterface $store)
-    {
-        if (!empty($order->getSalesOrderId())) {
-            return false;
-        }
-
-        $createdAt = \DateTime::createFromFormat('Y-m-d H:i:s', $order->getCreatedAt());
-
-        if ($createdAt < $this->orderGeneralConfig->getOrderImportFromDate($store)) {
-            return false;
-        }
-
-        if ($order->isTest()) {
-            if (!$this->orderGeneralConfig->shouldImportTestOrders($store)) {
-                return false;
-            }
-        } elseif (!$this->orderGeneralConfig->shouldImportLiveOrders($store)) {
-            return false;
-        }
-
-        $isShipped = ($order->getShoppingFeedStatus() === OrderInterface::STATUS_SHIPPED);
-
-        if ($order->isFulfilled()) {
-            return $isShipped && $this->orderGeneralConfig->shouldImportFulfilledOrders($store);
-        }
-
-        if ($isShipped) {
-            return $this->orderGeneralConfig->shouldImportShippedOrders($store);
-        }
-
-        return ($order->getShoppingFeedStatus() === OrderInterface::STATUS_WAITING_SHIPMENT);
     }
 
     /**
@@ -176,7 +149,7 @@ class UnimportedOrders implements MessageInterface
                 if (
                     (null !== $store)
                     && ($order->getImportRemainingTryCount() === 0)
-                    && $this->isImportableStoreOrder($order, $store)
+                    && $this->importabilityChecker->isImportableOrder($order, $store)
                 ) {
                     $this->unimportedOrderIds[] = $order->getId();
                 }
