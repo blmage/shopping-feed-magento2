@@ -132,6 +132,9 @@
         <column xsi:type="text" name="additional_fields" nullable="true" comment="Additional Fields"/>
         <column xsi:type="int" name="import_remaining_try_count" padding="10" unsigned="true" nullable="false" identity="false" default="3" comment="Import Remaining Try Count"/>
         <column xsi:type="boolean" name="has_non_notifiable_shipment" nullable="false" comment="Has Non-Notifiable Shipment"/>
+        <column xsi:type="smallint" name="syncing_pending_changes" padding="5" unsigned="true" nullable="false" identity="false" default="0" comment="Syncing Pending Changes"/>
+        <column xsi:type="int" name="syncing_change_count" padding="10" unsigned="true" nullable="false" identity="false" default="0" comment="Syncing Change Count"/>
+        <column xsi:type="boolean" name="is_held_by_syncing" nullable="false" default="false" comment="Is Held By Syncing"/>
         <column xsi:type="datetime" name="created_at" on_update="false" nullable="false" comment="Created At"/>
         <column xsi:type="datetime" name="updated_at" on_update="false" nullable="false" comment="Updated At"/>
         <column xsi:type="datetime" name="fetched_at" on_update="false" nullable="false" comment="Fetched At"/>
@@ -157,6 +160,9 @@
             <column name="shopping_feed_marketplace_id"/>
             <column name="marketplace_order_number"/>
         </constraint>
+        <index referenceId="SFM_MARKETPLACE_ORDER_SYNCING_PENDING_CHANGES" indexType="btree">
+            <column name="syncing_pending_changes"/>
+        </index>
     </table>
 
     <table name="sfm_marketplace_order_address" resource="default" engine="innodb" comment="Shopping Feed Marketplace Order Address">
@@ -190,6 +196,7 @@
         <column xsi:type="int" name="item_id" padding="10" unsigned="true" nullable="false" identity="true" comment="Item ID"/>
         <column xsi:type="int" name="order_id" padding="10" unsigned="true" nullable="false" identity="false" comment="Order ID"/>
         <column xsi:type="bigint" name="shopping_feed_item_id" padding="20" unsigned="true" nullable="true" identity="false" comment="Shopping Feed Item ID"/>
+        <column xsi:type="varchar" name="shopping_feed_status" nullable="true" length="64" comment="Shopping Feed Status"/>
         <column xsi:type="varchar" name="reference" nullable="false" length="255" comment="Reference"/>
         <column xsi:type="decimal" name="quantity" scale="4" precision="12" unsigned="false" nullable="false" comment="Quantity"/>
         <column xsi:type="decimal" name="price" scale="4" precision="12" unsigned="false" nullable="false" comment="Prices"/>

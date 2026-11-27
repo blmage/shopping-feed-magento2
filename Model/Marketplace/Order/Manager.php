@@ -8,10 +8,13 @@ use Magento\Framework\App\Filesystem\DirectoryList;
 use Magento\Framework\App\ObjectManager;
 use Magento\Framework\Exception\CouldNotSaveException;
 use Magento\Framework\Exception\LocalizedException;
+use Magento\Framework\Exception\NoSuchEntityException;
 use Magento\Framework\Filesystem;
 use Magento\Sales\Api\Data\InvoiceInterface;
 use Magento\Sales\Api\Data\OrderItemInterface as SalesOrderItemInterface;
 use Magento\Sales\Api\OrderItemRepositoryInterface as SalesOrderItemRepositoryInterface;
+use Magento\Sales\Api\OrderRepositoryInterface as SalesOrderRepositoryInterface;
+use Magento\Sales\Model\Order as SalesOrder;
 use Magento\Sales\Model\ResourceModel\Order\Invoice\CollectionFactory as SalesInvoiceCollectionFactory;
 use ShoppingFeed\Manager\Api\Data\Account\StoreInterface;
 use ShoppingFeed\Manager\Api\Data\Marketplace\Order\ItemInterface;
@@ -108,6 +111,11 @@ class Manager
     private $salesOrderItemRepository;
 
     /**
+     * @var SalesOrderRepositoryInterface
+     */
+    private $salesOrderRepository;
+
+    /**
      * @var SalesInvoiceCollectionFactory
      */
     private $salesInvoiceCollectionFactory;
@@ -148,6 +156,7 @@ class Manager
      * @param InvoicePdfProcessorPoolInterface|null $invoicePdfProcessorPool
      * @param Filesystem|null $fileSystem
      * @param SalesOrderItemRepositoryInterface|null $salesOrderItemRepository
+     * @param SalesOrderRepositoryInterface|null $salesOrderRepository
      */
     public function __construct(
         ApiSessionManager $apiSessionManager,
@@ -165,7 +174,8 @@ class Manager
         ?InvoicePdfProcessorPoolInterface $invoicePdfProcessorPool = null,
         ?Filesystem $fileSystem = null,
         ?SearchCriteriaBuilder $searchCriteriaBuilder = null,
-        ?SalesOrderItemRepositoryInterface $salesOrderItemRepository = null
+        ?SalesOrderItemRepositoryInterface $salesOrderItemRepository = null,
+        ?SalesOrderRepositoryInterface $salesOrderRepository = null
     ) {
         $this->apiSessionManager = $apiSessionManager;
         $this->orderGeneralConfig = $orderGeneralConfig;
@@ -195,6 +205,9 @@ class Manager
 
         $this->salesOrderItemRepository = $salesOrderItemRepository
             ?? $objectManager->get(SalesOrderItemRepositoryInterface::class);
+
+        $this->salesOrderRepository = $salesOrderRepository
+            ?? $objectManager->get(SalesOrderRepositoryInterface::class);
     }
 
     /**
@@ -221,6 +234,30 @@ class Manager
     }
 
     /**
+     * The statuses in which imported orders are fetched again, to detect the changes to synchronize.
+     *
+     * @param StoreInterface $store
+     * @return string[]
+     */
+    public function getRefetchedShoppingFeedStatuses(StoreInterface $store)
+    {
+        $statuses = $this->getSyncableShoppingFeedStatuses($store);
+
+        if ($this->orderGeneralConfig->shouldCreatePartialFulfilmentShipments($store)) {
+            $statuses[] = OrderInterface::STATUS_PARTIALLY_SHIPPED;
+        }
+
+        if (
+            SalesOrderSyncerInterface::SYNCING_ACTION_NONE
+            !== $this->orderGeneralConfig->getOrderPartialRefundSyncingAction($store)
+        ) {
+            $statuses[] = OrderInterface::STATUS_PARTIALLY_REFUNDED;
+        }
+
+        return $statuses;
+    }
+
+    /**
      * @param StoreInterface $store
      * @param int $channelId
      * @param string $reference
@@ -228,6 +265,19 @@ class Manager
      * @throws LocalizedException
      */
     public function getStoreImportableApiOrderByChannelAndReference(StoreInterface $store, $channelId, $reference)
+    {
+        return $this->getStoreApiOrderByChannelAndReference($store, $channelId, $reference, self::API_UNACKNOWLEDGED);
+    }
+
+    /**
+     * @param StoreInterface $store
+     * @param int $channelId
+     * @param string $reference
+     * @param string $acknowledgement Either API_ACKNOWLEDGED or API_UNACKNOWLEDGED.
+     * @return ApiOrder|null
+     * @throws LocalizedException
+     */
+    public function getStoreApiOrderByChannelAndReference(StoreInterface $store, $channelId, $reference, $acknowledgement)
     {
         if (empty($channelId) || empty($reference)) {
             return null;
@@ -238,7 +288,7 @@ class Manager
         $orders = $apiStore->getOrderApi()
             ->getAll(
                 [
-                    self::API_FILTER_ACKNOWLEDGEMENT => self::API_UNACKNOWLEDGED,
+                    self::API_FILTER_ACKNOWLEDGEMENT => $acknowledgement,
                     self::API_FILTER_CHANNEL_ID => (int) $channelId,
                     self::API_FILTER_REFERENCE => trim((string) $reference),
                 ]
@@ -321,21 +371,96 @@ class Manager
             return [];
         }
 
-        $apiStore = $this->apiSessionManager->getStoreApiResource($store);
-        $statuses = $this->getSyncableShoppingFeedStatuses($store);
+        $apiOrders = [];
+        $statuses = $this->getRefetchedShoppingFeedStatuses($store);
 
-        if (empty($statuses)) {
+        if (!empty($statuses)) {
+            $apiStore = $this->apiSessionManager->getStoreApiResource($store);
+
+            $statusApiOrders = $apiStore->getOrderApi()
+                ->getAll(
+                    [
+                        self::API_FILTER_STATUS => $statuses,
+                        self::API_FILTER_ACKNOWLEDGEMENT => self::API_ACKNOWLEDGED,
+                        self::API_FILTER_SINCE => $this->orderGeneralConfig->getOrderSyncingFromDate($store),
+                    ]
+                );
+
+            foreach ($statusApiOrders as $apiOrder) {
+                $apiOrders[(int) $apiOrder->getId()] = $apiOrder;
+            }
+        }
+
+        foreach ($this->getStoreLeftPartiallyShippedFulfilledApiOrders($store, $apiOrders) as $apiOrder) {
+            $apiOrders[(int) $apiOrder->getId()] = $apiOrder;
+        }
+
+        return array_values($apiOrders);
+    }
+
+    /**
+     * Fetch again, one by one, the imported fulfilled orders that are still partially shipped (or partially refunded)
+     * locally and that Magento can still ship, but were not returned by the status filter (usually because they are
+     * now fully shipped, or because their status is not fetched again), so that their last items get shipped.
+     * The API can not filter orders on their last update.
+     *
+     * @param StoreInterface $store
+     * @param ApiOrder[] $fetchedApiOrders The orders already fetched, by ID.
+     * @return ApiOrder[]
+     */
+    private function getStoreLeftPartiallyShippedFulfilledApiOrders(StoreInterface $store, array $fetchedApiOrders)
+    {
+        if (!$this->orderGeneralConfig->shouldCreateFulfilmentShipment($store)) {
             return [];
         }
 
-        return $apiStore->getOrderApi()
-            ->getAll(
-                [
-                    self::API_FILTER_STATUS => $statuses,
-                    self::API_FILTER_ACKNOWLEDGEMENT => self::API_ACKNOWLEDGED,
-                    self::API_FILTER_SINCE => $this->orderGeneralConfig->getOrderSyncingFromDate($store),
-                ]
-            );
+        $orderCollection = $this->orderCollectionFactory->create();
+        $orderCollection->addStoreIdFilter($store->getId());
+        $orderCollection->addImportedFilter();
+        $orderCollection->addIsFulfilledFilter(true);
+        $orderCollection->addShoppingFeedStatusFilter(
+            [ OrderInterface::STATUS_PARTIALLY_SHIPPED, OrderInterface::STATUS_PARTIALLY_REFUNDED ]
+        );
+        $orderCollection->addCreatedFromDateFilter($this->orderGeneralConfig->getOrderSyncingFromDate($store));
+
+        $apiOrders = [];
+
+        /** @var OrderInterface $marketplaceOrder */
+        foreach ($orderCollection as $marketplaceOrder) {
+            if (isset($fetchedApiOrders[(int) $marketplaceOrder->getShoppingFeedOrderId()])) {
+                continue;
+            }
+
+            try {
+                $salesOrder = $this->salesOrderRepository->get($marketplaceOrder->getSalesOrderId());
+
+                // Nothing left to ship (or on hold): no need to know more.
+                if (!$salesOrder instanceof SalesOrder || !$salesOrder->canShip()) {
+                    continue;
+                }
+
+                $apiOrder = $this->getStoreApiOrderByChannelAndReference(
+                    $store,
+                    $marketplaceOrder->getShoppingFeedMarketplaceId(),
+                    $marketplaceOrder->getMarketplaceOrderNumber(),
+                    self::API_ACKNOWLEDGED
+                );
+
+                if (null !== $apiOrder) {
+                    $apiOrders[] = $apiOrder;
+                }
+            } catch (NoSuchEntityException $e) {
+                continue;
+            } catch (\Exception $e) {
+                $this->logOrderError(
+                    $marketplaceOrder,
+                    __('Could not fetch the order again:') . "\n" . $e->getMessage(),
+                    (string) $e
+                );
+            }
+        }
+
+        return $apiOrders;
     }
 
     /**
@@ -349,16 +474,12 @@ class Manager
             return [];
         }
 
-        $statuses = $this->getSyncableShoppingFeedStatuses($store);
-
-        if (empty($statuses)) {
-            return [];
-        }
-
         $orderCollection = $this->orderCollectionFactory->create();
 
+        // The orders whose status has a syncing action (cancel and refund actions run at every run), and the orders
+        // with a change left to synchronize.
         $orderCollection->addImportedFilter();
-        $orderCollection->addShoppingFeedStatusFilter($statuses);
+        $orderCollection->addShoppingFeedStatusOrSyncingPendingFilter($this->getSyncableShoppingFeedStatuses($store));
         $orderCollection->addCreatedFromDateFilter($this->orderGeneralConfig->getOrderSyncingFromDate($store));
         $orderCollection->addStoreIdFilter($store->getId());
 

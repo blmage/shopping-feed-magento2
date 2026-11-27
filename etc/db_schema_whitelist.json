@@ -123,7 +123,13 @@
             "imported_at": true,
             "acknowledged_at": true,
             "latest_ship_date": true,
-            "is_test": true
+            "is_test": true,
+            "syncing_pending_changes": true,
+            "syncing_change_count": true,
+            "is_held_by_syncing": true
+        },
+        "index": {
+            "SFM_MARKETPLACE_ORDER_SYNCING_PENDING_CHANGES": true
         },
         "constraint": {
             "PRIMARY": true,
@@ -169,7 +175,8 @@
             "price": true,
             "tax_amount": true,
             "additional_fields": true,
-            "shopping_feed_item_id": true
+            "shopping_feed_item_id": true,
+            "shopping_feed_status": true
         },
         "constraint": {
             "PRIMARY": true,

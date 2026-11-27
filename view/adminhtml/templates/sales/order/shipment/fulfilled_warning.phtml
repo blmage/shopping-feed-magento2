@@ -1,0 +1,15 @@
+<?php /** @var \ShoppingFeed\Manager\Block\Adminhtml\Sales\Order\View\Marketplace $block */ ?>
+<?php if (($marketplaceOrder = $block->getMarketplaceOrder()) && $marketplaceOrder->isFulfilled()): ?>
+    <div class="messages">
+        <div class="message message-warning">
+            <div>
+                <?= $block->escapeHtml(
+                    __(
+                        'This order is fulfilled by the marketplace (%1): the marketplace ships it, not you. Shipments created here are not sent to Shopping Feed.',
+                        $marketplaceOrder->getMarketplaceName()
+                    )
+                ) ?>
+            </div>
+        </div>
+    </div>
+<?php endif ?>

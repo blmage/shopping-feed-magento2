@@ -2,6 +2,7 @@
 
 namespace ShoppingFeed\Manager\Model\Marketplace\Order;
 
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\Exception\NoSuchEntityException;
 use Magento\Framework\Stdlib\DateTime\TimezoneInterface as TimezoneInterface;
 use Psr\Log\LoggerInterface;
@@ -19,6 +20,8 @@ use ShoppingFeed\Manager\Api\Marketplace\Order\ItemRepositoryInterface;
 use ShoppingFeed\Manager\DataObject;
 use ShoppingFeed\Manager\DataObjectFactory;
 use ShoppingFeed\Manager\DB\TransactionFactory;
+use ShoppingFeed\Manager\Model\Marketplace\Order\Item\StateResolver as MarketplaceItemStateResolver;
+use ShoppingFeed\Manager\Model\ResourceModel\Marketplace\Order as OrderResource;
 use ShoppingFeed\Manager\Model\ResourceModel\Marketplace\Order\Item\CollectionFactory as ItemCollectionFactory;
 use ShoppingFeed\Manager\Model\Sales\Order\ConfigInterface as OrderConfigInterface;
 use ShoppingFeed\Sdk\Api\Order\OrderResource as ApiOrder;
@@ -89,6 +92,21 @@ class Importer
     private $transactionFactory;
 
     /**
+     * @var Manager
+     */
+    private $orderManager;
+
+    /**
+     * @var OrderResource
+     */
+    private $orderResource;
+
+    /**
+     * @var MarketplaceItemStateResolver
+     */
+    private $marketplaceItemStateResolver;
+
+    /**
      * @param LoggerInterface $logger
      * @param TimezoneInterface $localeDate
      * @param DataObjectFactory $dataObjectFactory
@@ -101,6 +119,9 @@ class Importer
      * @param ItemRepositoryInterface $itemRepository
      * @param ItemCollectionFactory $itemCollectionFactory
      * @param TransactionFactory $transactionFactory
+     * @param Manager|null $orderManager
+     * @param OrderResource|null $orderResource
+     * @param MarketplaceItemStateResolver|null $marketplaceItemStateResolver
      */
     public function __construct(
         LoggerInterface $logger,
@@ -114,7 +135,10 @@ class Importer
         ItemInterfaceFactory $itemFactory,
         ItemRepositoryInterface $itemRepository,
         ItemCollectionFactory $itemCollectionFactory,
-        TransactionFactory $transactionFactory
+        TransactionFactory $transactionFactory,
+        ?Manager $orderManager = null,
+        ?OrderResource $orderResource = null,
+        ?MarketplaceItemStateResolver $marketplaceItemStateResolver = null
     ) {
         $this->logger = $logger;
         $this->localeDate = $localeDate;
@@ -128,6 +152,11 @@ class Importer
         $this->itemRepository = $itemRepository;
         $this->itemCollectionFactory = $itemCollectionFactory;
         $this->transactionFactory = $transactionFactory;
+        $this->orderManager = $orderManager ?? ObjectManager::getInstance()->get(Manager::class);
+        $this->orderResource = $orderResource ?? ObjectManager::getInstance()->get(OrderResource::class);
+
+        $this->marketplaceItemStateResolver = $marketplaceItemStateResolver
+            ?? ObjectManager::getInstance()->get(MarketplaceItemStateResolver::class);
     }
 
     /**
@@ -465,6 +494,28 @@ class Importer
     /**
      * @param ApiItem $apiItem
      * @param array $referenceAliases
+     * @return string
+     */
+    public function getApiItemReference(ApiItem $apiItem, array $referenceAliases)
+    {
+        $reference = $apiItem->getReference();
+
+        return $referenceAliases[$reference] ?? $reference;
+    }
+
+    /**
+     * @param ApiItem $apiItem
+     * @return string|null The status (possibly empty), or null if it is not available.
+     */
+    public function getApiItemStatus(ApiItem $apiItem)
+    {
+        // Item statuses are not available in older versions of the SDK.
+        return method_exists($apiItem, 'getStatus') ? trim((string) $apiItem->getStatus()) : null;
+    }
+
+    /**
+     * @param ApiItem $apiItem
+     * @param array $referenceAliases
      * @param StoreInterface $store
      * @param MarketplaceItemInterface|null $item
      * @return MarketplaceItemInterface
@@ -476,14 +527,10 @@ class Importer
         ?MarketplaceItemInterface $item = null
     ) {
         $item = (null !== $item) ? $item : $this->itemFactory->create();
-        $reference = $apiItem->getReference();
-
-        if (isset($referenceAliases[$reference])) {
-            $reference = $referenceAliases[$reference];
-        }
 
         $item->setShoppingFeedItemId($apiItem->getId());
-        $item->setReference($reference);
+        $item->setShoppingFeedStatus($this->getApiItemStatus($apiItem));
+        $item->setReference($this->getApiItemReference($apiItem, $referenceAliases));
         $item->setQuantity($apiItem->getQuantity());
         $item->setPrice($apiItem->getUnitPrice());
         $item->setTaxAmount($apiItem->getTaxAmount());
@@ -511,13 +558,14 @@ class Importer
         StoreInterface $store
     ) {
         $orderId = $marketplaceOrder->getId();
+        $isImported = !empty($marketplaceOrder->getSalesOrderId());
 
         $billingAddress = null;
         $shippingAddress = null;
         $savableItems = [];
         $deletableItems = [];
 
-        if (!$marketplaceOrder->getSalesOrderId()) {
+        if (!$isImported) {
             $this->importApiPaymentAndShipmentOrderData($apiOrder, $marketplaceOrder, $store);
 
             if ($this->orderGeneralConfig->shouldSyncNonImportedAddresses($store)) {
@@ -555,37 +603,46 @@ class Importer
                     $shippingAddress
                 );
             }
+        }
 
-            if ($this->orderGeneralConfig->shouldSyncNonImportedItems($store)) {
-                $itemCollection = $this->itemCollectionFactory->create();
-                $itemCollection->addOrderIdFilter($orderId);
-                $oldItems = $itemCollection->getItems();
-                $referenceAliases = (array) $apiOrder->getItemsReferencesAliases();
+        $referenceAliases = (array) $apiOrder->getItemsReferencesAliases();
+        $itemCollection = $this->itemCollectionFactory->create();
+        $itemCollection->addOrderIdFilter($orderId);
+        $storedItems = $itemCollection->getItems();
+        $itemComparison = $this->compareApiOrderItems($apiOrder, $storedItems, $referenceAliases);
 
-                foreach ($apiOrder->getItems() as $apiItem) {
-                    $isNewItem = true;
-                    $reference = $apiItem->getReference();
+        if ($isImported || $this->orderGeneralConfig->shouldSyncNonImportedItems($store)) {
+            // The items of imported orders always mirror the marketplace: the synchronization compares them with the
+            // items of the sales order to know what was shipped or refunded.
+            foreach ($itemComparison['matches'] as list($apiItem, $storedItem)) {
+                $savableItems[] = $this->importApiOrderItem($apiItem, $referenceAliases, $store, $storedItem);
+            }
 
-                    if (isset($referenceAliases[$reference])) {
-                        $reference = $referenceAliases[$reference];
-                    }
-
-                    /** @var MarketplaceItemInterface $oldItem */
-                    foreach ($oldItems as $key => $oldItem) {
-                        if ($oldItem->getReference() === $reference) {
-                            $isNewItem = false;
-                            $savableItems[] = $this->importApiOrderItem($apiItem, $referenceAliases, $store, $oldItem);
-                            unset($oldItems[$key]);
-                            break;
-                        }
-                    }
-
-                    if ($isNewItem) {
-                        $savableItems[] = $this->importApiOrderItem($apiItem, $referenceAliases, $store);
-                    }
+            $deletableItems = $itemComparison['unmatched_stored_items'];
+        } else {
+            foreach ($itemComparison['matches'] as list($apiItem, $storedItem)) {
+                if (null !== $storedItem) {
+                    $savableItems[] = $storedItem->setShoppingFeedStatus($this->getApiItemStatus($apiItem));
                 }
+            }
+        }
 
-                $deletableItems = $oldItems;
+        $syncingChanges = 0;
+
+        if ($isImported) {
+            if ($marketplaceOrder->getShoppingFeedStatus() !== $apiOrder->getStatus()) {
+                $syncingChanges |= MarketplaceOrderInterface::SYNCING_CHANGE_STATUS;
+            }
+
+            // Statuses stored for the first time (orders fetched before item statuses were stored) are not a change.
+            if (!$itemComparison['is_first_refresh']) {
+                $syncingChanges |= $itemComparison['syncing_changes'];
+            }
+
+            if ($syncingChanges > 0) {
+                $marketplaceOrder->setSyncingPendingChanges(
+                    $marketplaceOrder->getSyncingPendingChanges() | $syncingChanges
+                );
             }
         }
 
@@ -602,9 +659,13 @@ class Importer
                 $billingAddress,
                 $shippingAddress,
                 $savableItems,
-                $deletableItems
+                $deletableItems,
+                $syncingChanges
             ) {
                 $this->orderRepository->save($marketplaceOrder);
+
+                // The syncing state is not written by the save (see the resource model).
+                $this->orderResource->addOrderSyncingPendingChanges($orderId, $syncingChanges);
 
                 if (null !== $billingAddress) {
                     $this->addressRepository->save($billingAddress);
@@ -627,5 +688,159 @@ class Importer
         );
 
         $transaction->save();
+
+        if ($isImported && $itemComparison['has_shape_changed']) {
+            // How Shopping Feed splits or merges items is not documented: keep a trace of each case.
+            try {
+                $this->orderManager->logOrderInfo(
+                    $marketplaceOrder,
+                    __('The items of the order have changed on the marketplace.'),
+                    $this->getItemComparisonDetails($itemComparison)
+                );
+            } catch (\Exception $e) {
+                $this->logger->error($e);
+            }
+        }
+    }
+
+    /**
+     * @param ApiItem $apiItem
+     * @param string $reference
+     * @param MarketplaceItemInterface[] $storedItems The candidate items. The matching item is removed from them.
+     * @return MarketplaceItemInterface|null
+     */
+    private function extractMatchingStoredItem(ApiItem $apiItem, $reference, array &$storedItems)
+    {
+        $apiItemId = (int) $apiItem->getId();
+
+        if ($apiItemId > 0) {
+            foreach ($storedItems as $key => $storedItem) {
+                if ($storedItem->getShoppingFeedItemId() === $apiItemId) {
+                    unset($storedItems[$key]);
+
+                    return $storedItem;
+                }
+            }
+        }
+
+        // Only fall back on the reference when one of the two items has no ID: two items with different IDs are
+        // different items, even when they share the same reference (the API groups items by product and status).
+        foreach ($storedItems as $key => $storedItem) {
+            if (
+                (($apiItemId <= 0) || (null === $storedItem->getShoppingFeedItemId()))
+                && ($storedItem->getReference() === $reference)
+            ) {
+                unset($storedItems[$key]);
+
+                return $storedItem;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param ApiOrder $apiOrder
+     * @param MarketplaceItemInterface[] $storedItems
+     * @param array $referenceAliases
+     * @return array
+     */
+    private function compareApiOrderItems(ApiOrder $apiOrder, array $storedItems, array $referenceAliases)
+    {
+        $isFirstRefresh = !empty($storedItems);
+
+        foreach ($storedItems as $storedItem) {
+            if (null !== $storedItem->getShoppingFeedStatus()) {
+                $isFirstRefresh = false;
+                break;
+            }
+        }
+
+        $matches = [];
+        $unmatchedStoredItems = $storedItems;
+        $syncingChanges = 0;
+        $hasShapeChanged = false;
+        $storedItemsData = [];
+
+        foreach ($storedItems as $storedItem) {
+            $storedItemsData[] = [
+                'id' => $storedItem->getShoppingFeedItemId(),
+                'reference' => $storedItem->getReference(),
+                'quantity' => $storedItem->getQuantity(),
+                'status' => $storedItem->getShoppingFeedStatus(),
+            ];
+        }
+
+        foreach ($apiOrder->getItems() as $apiItem) {
+            $storedItem = $this->extractMatchingStoredItem(
+                $apiItem,
+                $this->getApiItemReference($apiItem, $referenceAliases),
+                $unmatchedStoredItems
+            );
+
+            if (null === $storedItem) {
+                $hasShapeChanged = true;
+            } else {
+                if (abs($storedItem->getQuantity() - (float) $apiItem->getQuantity()) > 0.0001) {
+                    $hasShapeChanged = true;
+                }
+
+                $storedStatus = $storedItem->getShoppingFeedStatus();
+                $apiStatus = $this->getApiItemStatus($apiItem);
+
+                if ((null !== $storedStatus) && ($storedStatus !== $apiStatus)) {
+                    // Any item change that is not a shipment may be part of a refund: rather alert for nothing than
+                    // miss a refund, since item statuses are not documented.
+                    $isShipped = MarketplaceItemStateResolver::STATE_SHIPPED
+                        === $this->marketplaceItemStateResolver->getStatusState($apiStatus);
+
+                    $syncingChanges |= $isShipped
+                        ? MarketplaceOrderInterface::SYNCING_CHANGE_ITEM_SHIPMENT
+                        : MarketplaceOrderInterface::SYNCING_CHANGE_ITEM_REFUND;
+                }
+            }
+
+            $matches[] = [ $apiItem, $storedItem ];
+        }
+
+        if (!empty($unmatchedStoredItems)) {
+            $hasShapeChanged = true;
+        }
+
+        if ($hasShapeChanged) {
+            // Items split, merged, added or removed: anything may have been shipped or refunded.
+            $syncingChanges |= MarketplaceOrderInterface::SYNCING_CHANGE_ITEM_SHIPMENT
+                | MarketplaceOrderInterface::SYNCING_CHANGE_ITEM_REFUND;
+        }
+
+        return [
+            'matches' => $matches,
+            'stored_items_data' => $storedItemsData,
+            'unmatched_stored_items' => $unmatchedStoredItems,
+            'is_first_refresh' => $isFirstRefresh,
+            'syncing_changes' => $syncingChanges,
+            'has_shape_changed' => $hasShapeChanged,
+        ];
+    }
+
+    /**
+     * @param array $itemComparison
+     * @return string
+     */
+    private function getItemComparisonDetails(array $itemComparison)
+    {
+        $before = $itemComparison['stored_items_data'];
+        $after = [];
+
+        foreach ($itemComparison['matches'] as list($apiItem)) {
+            $after[] = [
+                'id' => $apiItem->getId(),
+                'reference' => $apiItem->getReference(),
+                'quantity' => $apiItem->getQuantity(),
+                'status' => $this->getApiItemStatus($apiItem),
+            ];
+        }
+
+        return (string) json_encode([ 'before' => $before, 'after' => $after ], JSON_PRETTY_PRINT);
     }
 }

@@ -55,6 +55,7 @@ use ShoppingFeed\Manager\Model\Sales\Order\Business\TaxManager as BusinessTaxMan
 use ShoppingFeed\Manager\Model\Sales\Order\ConfigInterface as OrderConfigInterface;
 use ShoppingFeed\Manager\Model\Sales\Order\Customer\Importer as CustomerImporter;
 use ShoppingFeed\Manager\Model\Sales\Order\SalesRule\Applier as SalesRuleApplier;
+use ShoppingFeed\Manager\Model\Sales\Order\Shipment\FulfilmentShipper;
 use ShoppingFeed\Manager\Model\Shipping\Method\ApplierPoolInterface as ShippingMethodApplierPoolInterface;
 use ShoppingFeed\Manager\Model\TimeHelper;
 use ShoppingFeed\Manager\Model\Ui\Payment\ConfigProvider as PaymentConfigProvider;
@@ -246,6 +247,11 @@ class Importer implements ImporterInterface
     private $marketplaceOrderImportabilityChecker;
 
     /**
+     * @var FulfilmentShipper
+     */
+    private $fulfilmentShipper;
+
+    /**
      * @var BaseStore|null
      */
     private $currentTargetBaseStore = null;
@@ -291,6 +297,7 @@ class Importer implements ImporterInterface
      * @param SalesOrderRepositoryInterface|null $salesOrderRepository
      * @param ImportStateInterface|null $importState
      * @param MarketplaceOrderImportabilityChecker|null $marketplaceOrderImportabilityChecker
+     * @param FulfilmentShipper|null $fulfilmentShipper
      */
     public function __construct(
         LoggerInterface $logger,
@@ -327,7 +334,8 @@ class Importer implements ImporterInterface
         ?SalesRuleApplier $salesRuleApplier = null,
         ?SalesOrderRepositoryInterface $salesOrderRepository = null,
         ?ImportStateInterface $importState = null,
-        ?MarketplaceOrderImportabilityChecker $marketplaceOrderImportabilityChecker = null
+        ?MarketplaceOrderImportabilityChecker $marketplaceOrderImportabilityChecker = null,
+        ?FulfilmentShipper $fulfilmentShipper = null
     ) {
         $this->logger = $logger;
         $this->transactionFactory = $transactionFactory;
@@ -376,6 +384,9 @@ class Importer implements ImporterInterface
 
         $this->marketplaceOrderImportabilityChecker = $marketplaceOrderImportabilityChecker
             ?? $objectManager->get(MarketplaceOrderImportabilityChecker::class);
+
+        $this->fulfilmentShipper = $fulfilmentShipper
+            ?? $objectManager->get(FulfilmentShipper::class);
     }
 
     /**
@@ -1662,8 +1673,23 @@ class Importer implements ImporterInterface
                     );
 
                 if ($shouldShipOrder) {
-                    $this->logDebugMessage('Creating shipment.');
-                    $this->shipSalesOrder($order);
+                    if (
+                        $marketplaceOrder->isFulfilled()
+                        && $this->orderGeneralConfig->shouldCreatePartialFulfilmentShipments($store)
+                    ) {
+                        $this->logDebugMessage('Creating shipment for the items shipped by the marketplace.');
+
+                        $this->fulfilmentShipper->createShipment(
+                            $order,
+                            $this->fulfilmentShipper->getQuantitiesToShip(
+                                $this->fulfilmentShipper->getShippableOrderItems($marketplaceOrder, $order, true)
+                            )
+                        );
+                    } else {
+                        $this->logDebugMessage('Creating shipment.');
+                        $this->shipSalesOrder($order);
+                    }
+
                     $marketplaceOrder->setHasNonNotifiableShipment(true);
                 } else {
                     $this->logDebugMessage('A shipment is not required.');

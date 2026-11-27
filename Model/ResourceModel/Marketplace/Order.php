@@ -49,6 +49,14 @@ class Order extends AbstractDb
     {
         $data = parent::prepareDataForUpdate($object);
 
+        // The fetch and the synchronization can run at the same time, and both update orders: the syncing flags are
+        // only written by their own targeted updates, never with the rest of a (possibly outdated) order.
+        unset(
+            $data[OrderInterface::SYNCING_PENDING_CHANGES],
+            $data[OrderInterface::SYNCING_CHANGE_COUNT],
+            $data[OrderInterface::IS_HELD_BY_SYNCING]
+        );
+
         if (isset($data[OrderInterface::SALES_ORDER_ID])) {
             // Prevent importing marketplace orders twice by only updating the `sales_order_id` field when it is empty,
             // or when it has the same value as the one that we are saving.
@@ -83,6 +91,88 @@ class Order extends AbstractDb
             $connection->quoteInto('order_id = ?', $orderId)
             . ' AND '
             . $connection->quoteInto('import_remaining_try_count > ?', 0)
+        );
+    }
+
+    /**
+     * Record changes to synchronize, and count them.
+     *
+     * @param int $orderId
+     * @param int $changes Kinds of changes (see the OrderInterface::SYNCING_CHANGE_* constants).
+     * @throws LocalizedException
+     */
+    public function addOrderSyncingPendingChanges($orderId, $changes)
+    {
+        $changes = (int) $changes;
+
+        if ($changes <= 0) {
+            return;
+        }
+
+        $connection = $this->getConnection();
+        $pendingField = $connection->quoteIdentifier(OrderInterface::SYNCING_PENDING_CHANGES);
+        $countField = $connection->quoteIdentifier(OrderInterface::SYNCING_CHANGE_COUNT);
+
+        $connection->update(
+            $this->getMainTable(),
+            [
+                OrderInterface::SYNCING_PENDING_CHANGES => new \Zend_Db_Expr($pendingField . ' | ' . $changes),
+                OrderInterface::SYNCING_CHANGE_COUNT => new \Zend_Db_Expr($countField . ' + 1'),
+            ],
+            $connection->quoteInto(OrderInterface::ORDER_ID . ' = ?', $orderId)
+        );
+    }
+
+    /**
+     * Clear synchronized changes, unless new changes were recorded in the meantime (the fetch and the synchronization
+     * can run at the same time): everything is then left for the next run.
+     *
+     * @param int $orderId
+     * @param int $changes The synchronized kinds of changes.
+     * @param int $synchronizedChangeCount The change count when the order was read for the synchronization.
+     * @param int $retriedChanges The kinds of changes to synchronize again at the next run (set if not already).
+     * @return bool Whether the changes were cleared.
+     * @throws LocalizedException
+     */
+    public function clearOrderSyncingPendingChanges($orderId, $changes, $synchronizedChangeCount, $retriedChanges = 0)
+    {
+        $changes = (int) $changes;
+        $retriedChanges = (int) $retriedChanges;
+
+        if (($changes <= 0) && ($retriedChanges <= 0)) {
+            return true;
+        }
+
+        $connection = $this->getConnection();
+        $pendingField = $connection->quoteIdentifier(OrderInterface::SYNCING_PENDING_CHANGES);
+        $keptChangesMask = 0xFFFF & ~$changes;
+
+        return $connection->update(
+            $this->getMainTable(),
+            [
+                OrderInterface::SYNCING_PENDING_CHANGES => new \Zend_Db_Expr(
+                    '(' . $pendingField . ' & ' . $keptChangesMask . ') | ' . $retriedChanges
+                ),
+            ],
+            $connection->quoteInto(OrderInterface::ORDER_ID . ' = ?', $orderId)
+            . ' AND '
+            . $connection->quoteInto(OrderInterface::SYNCING_CHANGE_COUNT . ' = ?', (int) $synchronizedChangeCount)
+        ) > 0;
+    }
+
+    /**
+     * @param int $orderId
+     * @param bool $isHeldBySyncing
+     * @throws LocalizedException
+     */
+    public function updateOrderIsHeldBySyncing($orderId, $isHeldBySyncing)
+    {
+        $connection = $this->getConnection();
+
+        $connection->update(
+            $this->getMainTable(),
+            [ OrderInterface::IS_HELD_BY_SYNCING => $isHeldBySyncing ? 1 : 0 ],
+            $connection->quoteInto(OrderInterface::ORDER_ID . ' = ?', $orderId)
         );
     }
 

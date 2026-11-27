@@ -112,7 +112,9 @@ abstract class AbstractColumn extends Column
             $this->isTestOrderData($item),
             (bool) $item[OrderInterface::IS_FULFILLED],
             (int) $item[OrderInterface::SALES_ORDER_ID],
-            \DateTime::createFromFormat('Y-m-d H:i:s', $item[OrderInterface::CREATED_AT])
+            // An unreadable creation date is handled as a very old one.
+            \DateTime::createFromFormat('Y-m-d H:i:s', (string) $item[OrderInterface::CREATED_AT])
+                ?: new \DateTime('@0')
         );
     }
 

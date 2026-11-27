@@ -311,12 +311,22 @@ class Config extends AbstractConfig implements ConfigInterface
             [
                 'dataType' => UiText::NAME,
                 'hasEmptyOption' => true,
-                'optionArray' => array_values(
-                    array_filter(
-                        $this->orderSyncingActionSource->toOptionArray(),
-                        function (array $option) use ($orderPartialRefundSyncingActions) {
-                            return in_array($option['value'], $orderPartialRefundSyncingActions, true);
+                'optionArray' => array_map(
+                    function (array $option) {
+                        // Only the refunded items are refunded, not the whole order.
+                        if (SalesOrderSyncerInterface::SYNCING_ACTION_REFUND === $option['value']) {
+                            $option['label'] = __('Refund refunded items (experimental)');
                         }
+
+                        return $option;
+                    },
+                    array_values(
+                        array_filter(
+                            $this->orderSyncingActionSource->toOptionArray(),
+                            function (array $option) use ($orderPartialRefundSyncingActions) {
+                                return in_array($option['value'], $orderPartialRefundSyncingActions, true);
+                            }
+                        )
                     )
                 ),
             ]
@@ -712,9 +722,9 @@ class Config extends AbstractConfig implements ConfigInterface
                 [
                     'name' => self::KEY_CREATE_PARTIAL_FULFILMENT_SHIPMENTS,
                     'isCheckedByDefault' => false,
-                    'label' => __('Create Partial Shipments for Fulfilled Orders'),
+                    'label' => __('Create Partial Shipments for Fulfilled Orders (Experimental)'),
                     'checkedNotice' => __(
-                        'Orders fulfilled by the marketplaces will be shipped item by item, as the marketplaces ship them.'
+                        'Orders fulfilled by the marketplaces will be shipped item by item, as the marketplaces ship them. Experimental: this relies on the marketplaces marking each item as shipped, which Shopping Feed does not guarantee. Orders are only followed during the period set in "Synchronize Imported Orders Canceled on the Marketplaces For". When the items can not be identified with certainty, nothing is shipped until the whole order is.'
                     ),
                     'uncheckedNotice' => __(
                         'Orders fulfilled by the marketplaces will be shipped entirely upon import.'
@@ -857,7 +867,7 @@ class Config extends AbstractConfig implements ConfigInterface
                     'defaultUseValue' => SalesOrderSyncerInterface::SYNCING_ACTION_NONE,
                     'label' => __('Synchronization Action in Case of Partial Refund on the Marketplace'),
                     'notice' => __(
-                        'Only refunded items can be refunded automatically, without shipping fees. Other partial refunds block the order.'
+                        '"Refund refunded items" is experimental: it only refunds the items marked as refunded on the marketplace, offline and without shipping fees. Other partial refunds (shipping fees, amounts alone, items that can not be identified with certainty) block the order instead. Complete or closed orders can not be blocked: they only get a comment in their history. Partial refunds are only seen during the period set in "Synchronize Imported Orders Canceled on the Marketplaces For".'
                     ),
                     'sortOrder' => 395,
                 ]

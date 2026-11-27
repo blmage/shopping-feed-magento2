@@ -126,6 +126,42 @@ class Collection extends AbstractCollection
     }
 
     /**
+     * @param bool $isSyncingPending
+     * @return $this
+     */
+    public function addIsSyncingPendingFilter($isSyncingPending = true)
+    {
+        $this->addFieldToFilter(
+            OrderInterface::SYNCING_PENDING_CHANGES,
+            (bool) $isSyncingPending ? [ 'gt' => 0 ] : [ 'eq' => 0 ]
+        );
+
+        return $this;
+    }
+
+    /**
+     * Retain the orders with one of the given statuses, or whose syncing is pending.
+     *
+     * @param string|string[] $status
+     * @return $this
+     */
+    public function addShoppingFeedStatusOrSyncingPendingFilter($status)
+    {
+        $statuses = array_filter(array_map('trim', (array) $status));
+
+        if (empty($statuses)) {
+            $statuses = [ '_unexisting_' ];
+        }
+
+        $this->addFieldToFilter(
+            [ OrderInterface::SHOPPING_FEED_STATUS, OrderInterface::SYNCING_PENDING_CHANGES ],
+            [ [ 'in' => $statuses ], [ 'gt' => 0 ] ]
+        );
+
+        return $this;
+    }
+
+    /**
      * @param \DateTime $fromDate
      * @return $this
      */

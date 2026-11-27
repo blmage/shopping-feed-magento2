@@ -207,6 +207,31 @@ class Order extends AbstractModel implements OrderInterface
         return (bool) $this->getDataByKey(self::HAS_NON_NOTIFIABLE_SHIPMENT);
     }
 
+    public function isSyncingPending()
+    {
+        return $this->getSyncingPendingChanges() > 0;
+    }
+
+    public function getSyncingPendingChanges()
+    {
+        return (int) $this->getDataByKey(self::SYNCING_PENDING_CHANGES);
+    }
+
+    public function hasSyncingPendingChange($change)
+    {
+        return ($this->getSyncingPendingChanges() & (int) $change) > 0;
+    }
+
+    public function getSyncingChangeCount()
+    {
+        return (int) $this->getDataByKey(self::SYNCING_CHANGE_COUNT);
+    }
+
+    public function isHeldBySyncing()
+    {
+        return (bool) $this->getDataByKey(self::IS_HELD_BY_SYNCING);
+    }
+
     public function getCreatedAt()
     {
         return $this->getDataByKey(self::CREATED_AT);
@@ -371,6 +396,16 @@ class Order extends AbstractModel implements OrderInterface
     public function setHasNonNotifiableShipment($hasNonNotifiableShipment)
     {
         return $this->setData(self::HAS_NON_NOTIFIABLE_SHIPMENT, (bool) $hasNonNotifiableShipment);
+    }
+
+    public function setSyncingPendingChanges($changes)
+    {
+        return $this->setData(self::SYNCING_PENDING_CHANGES, max(0, (int) $changes));
+    }
+
+    public function setIsHeldBySyncing($isHeldBySyncing)
+    {
+        return $this->setData(self::IS_HELD_BY_SYNCING, (bool) $isHeldBySyncing);
     }
 
     public function setCreatedAt($createdAt)

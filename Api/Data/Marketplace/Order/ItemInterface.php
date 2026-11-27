@@ -13,6 +13,7 @@ interface ItemInterface
     const ITEM_ID = 'item_id';
     const ORDER_ID = 'order_id';
     const SHOPPING_FEED_ITEM_ID = 'shopping_feed_item_id';
+    const SHOPPING_FEED_STATUS = 'shopping_feed_status';
     const REFERENCE = 'reference';
     const QUANTITY = 'quantity';
     const PRICE = 'price';
@@ -41,6 +42,11 @@ interface ItemInterface
      * @return int|null
      */
     public function getShoppingFeedItemId();
+
+    /**
+     * @return string|null The status (possibly empty), or null if it was never stored.
+     */
+    public function getShoppingFeedStatus();
 
     /**
      * @return string
@@ -78,6 +84,12 @@ interface ItemInterface
      * @return ItemInterface
      */
     public function setShoppingFeedItemId($shoppingFeedItemId);
+
+    /**
+     * @param string|null $shoppingFeedStatus
+     * @return ItemInterface
+     */
+    public function setShoppingFeedStatus($shoppingFeedStatus);
 
     /**
      * @param string $reference

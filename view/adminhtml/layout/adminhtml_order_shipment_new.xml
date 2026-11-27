@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <body>
+        <referenceContainer name="content">
+            <block class="ShoppingFeed\Manager\Block\Adminhtml\Sales\Order\View\Marketplace" name="sfm_order_shipment_fulfilled_warning" template="ShoppingFeed_Manager::sales/order/shipment/fulfilled_warning.phtml" before="sales_shipment_create"/>
+        </referenceContainer>
+    </body>
+</page>

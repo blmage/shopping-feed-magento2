@@ -61,6 +61,13 @@ class Item extends AbstractModel implements ItemInterface
         return ($itemId > 0) ? $itemId : null;
     }
 
+    public function getShoppingFeedStatus()
+    {
+        // Null: never stored (items stored before statuses were). An empty status is kept as such.
+        $status = $this->getDataByKey(self::SHOPPING_FEED_STATUS);
+        return (null !== $status) ? trim((string) $status) : null;
+    }
+
     public function getReference()
     {
         return trim((string) $this->getDataByKey(self::REFERENCE));
@@ -104,6 +111,14 @@ class Item extends AbstractModel implements ItemInterface
     {
         $itemId = (int) $shoppingFeedItemId;
         return $this->setData(self::SHOPPING_FEED_ITEM_ID, ($itemId > 0) ? $itemId : null);
+    }
+
+    public function setShoppingFeedStatus($shoppingFeedStatus)
+    {
+        return $this->setData(
+            self::SHOPPING_FEED_STATUS,
+            (null !== $shoppingFeedStatus) ? trim((string) $shoppingFeedStatus) : null
+        );
     }
 
     public function setReference($reference)

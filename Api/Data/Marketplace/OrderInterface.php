@@ -32,6 +32,9 @@ interface OrderInterface
     const ADDITIONAL_FIELDS = 'additional_fields';
     const IMPORT_REMAINING_TRY_COUNT = 'import_remaining_try_count';
     const HAS_NON_NOTIFIABLE_SHIPMENT = 'has_non_notifiable_shipment';
+    const SYNCING_PENDING_CHANGES = 'syncing_pending_changes';
+    const SYNCING_CHANGE_COUNT = 'syncing_change_count';
+    const IS_HELD_BY_SYNCING = 'is_held_by_syncing';
     const CREATED_AT = 'created_at';
     const UPDATED_AT = 'updated_at';
     const FETCHED_AT = 'fetched_at';
@@ -56,6 +59,13 @@ interface OrderInterface
     const STATUS_REFUNDED = 'refunded';
     const STATUS_PARTIALLY_SHIPPED = 'partially_shipped';
     const STATUS_PARTIALLY_REFUNDED = 'partially_refunded';
+
+    /**
+     * Kinds of changes detected on the marketplace and still to synchronize (bits of `syncing_pending_changes`).
+     */
+    const SYNCING_CHANGE_STATUS = 1;
+    const SYNCING_CHANGE_ITEM_SHIPMENT = 2;
+    const SYNCING_CHANGE_ITEM_REFUND = 4;
 
     const ADDITIONAL_FIELD_CART_DISCOUNT_AMOUNT = 'seller_voucher';
     const ADDITIONAL_FIELD_IS_BUSINESS_ORDER = 'is_business_order';
@@ -187,6 +197,36 @@ interface OrderInterface
      * @return bool
      */
     public function getHasNonNotifiableShipment();
+
+    /**
+     * Whether a change on the marketplace (order status or item statuses) still has to be synchronized.
+     *
+     * @return bool
+     */
+    public function isSyncingPending();
+
+    /**
+     * @return int The kinds of changes still to synchronize (see the SYNCING_CHANGE_* constants).
+     */
+    public function getSyncingPendingChanges();
+
+    /**
+     * @param int $change One of the SYNCING_CHANGE_* constants.
+     * @return bool
+     */
+    public function hasSyncingPendingChange($change);
+
+    /**
+     * @return int The number of changes detected so far, used to tell whether a new one came in the meantime.
+     */
+    public function getSyncingChangeCount();
+
+    /**
+     * Whether the current hold of the sales order was put by the synchronization.
+     *
+     * @return bool
+     */
+    public function isHeldBySyncing();
 
     /**
      * @return string
@@ -352,6 +392,20 @@ interface OrderInterface
      * @return OrderInterface
      */
     public function setHasNonNotifiableShipment($hasNonNotifiableShipment);
+
+    /**
+     * Only changes the order in memory: the syncing state is saved by the targeted methods of the resource model.
+     *
+     * @param int $changes
+     * @return OrderInterface
+     */
+    public function setSyncingPendingChanges($changes);
+
+    /**
+     * @param bool $isHeldBySyncing
+     * @return OrderInterface
+     */
+    public function setIsHeldBySyncing($isHeldBySyncing);
 
     /**
      * @param string $createdAt

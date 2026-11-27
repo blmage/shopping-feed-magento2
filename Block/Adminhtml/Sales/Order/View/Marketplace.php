@@ -48,6 +48,9 @@ class Marketplace extends AbstractOrder
             ) {
                 $order = $invoice->getOrder();
                 $this->setOrder($order);
+            } elseif ($shipment = $this->_coreRegistry->registry('current_shipment')) {
+                $order = $shipment->getOrder();
+                $this->setOrder($order);
             } else {
                 throw $e;
             }
