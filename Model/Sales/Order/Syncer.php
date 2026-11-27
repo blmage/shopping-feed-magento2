@@ -391,20 +391,38 @@ class Syncer implements SyncerInterface
         if (null !== $onHoldComment) {
             $salesOrder->addCommentToStatusHistory($onHoldComment);
             $this->salesOrderRepository->save($salesOrder);
+            $this->logSyncingProblem($marketplaceOrder, $onHoldComment);
         }
 
         return false;
     }
 
     /**
+     * Log a configured action that could not be applied. Order logs are reserved for problems: unread logs raise an
+     * admin notification. What worked is only written to the order history.
+     *
+     * @param MarketplaceOrderInterface $marketplaceOrder
+     * @param string $message
+     * @param string $details
+     */
+    private function logSyncingProblem(MarketplaceOrderInterface $marketplaceOrder, $message, $details = '')
+    {
+        $this->marketplaceOrderManager->logOrderError($marketplaceOrder, $message, $details);
+    }
+
+    /**
      * @param MarketplaceOrderInterface $marketplaceOrder
      * @param SalesOrder $salesOrder
      * @param string $comment
+     * @param bool $isProblem Whether the hold replaces an action that could not be applied (it is then logged).
+     * @param string $problemDetails
      */
     private function holdStoreOrderWithComment(
         MarketplaceOrderInterface $marketplaceOrder,
         SalesOrder $salesOrder,
-        $comment
+        $comment,
+        $isProblem = false,
+        $problemDetails = ''
     ) {
         $isHeld = false;
 
@@ -412,8 +430,10 @@ class Syncer implements SyncerInterface
             $salesOrder->hold();
             $isHeld = true;
         } elseif (!$this->isSalesOrderOnHold($salesOrder)) {
-            // Magento can not hold complete, closed or cancelled orders: the comment remains.
+            // Magento can not hold complete, closed or cancelled orders: the comment remains, and the configured
+            // block did not happen.
             $comment .= ' ' . __('The order could not be blocked in its current state.');
+            $isProblem = true;
         }
 
         $salesOrder->addCommentToStatusHistory($comment);
@@ -421,6 +441,10 @@ class Syncer implements SyncerInterface
 
         if ($isHeld) {
             $this->setIsHeldBySyncing($marketplaceOrder, true);
+        }
+
+        if ($isProblem) {
+            $this->logSyncingProblem($marketplaceOrder, $comment, $problemDetails);
         }
     }
 
@@ -503,11 +527,10 @@ class Syncer implements SyncerInterface
             // Never release a hold here, even one put by the synchronization: it may have been put for an earlier
             // partial refund that could not be applied, and that is still to be handled manually.
             if ($this->isSalesOrderOnHold($salesOrder)) {
-                $salesOrder->addCommentToStatusHistory(
-                    $statusSentence . ' ' . __('The order is on hold: the refunded items were not refunded.')
-                );
-
+                $comment = $statusSentence . ' ' . __('The order is on hold: the refunded items were not refunded.');
+                $salesOrder->addCommentToStatusHistory($comment);
                 $this->salesOrderRepository->save($salesOrder);
+                $this->logSyncingProblem($marketplaceOrder, $comment);
 
                 return;
             }
@@ -567,12 +590,6 @@ class Syncer implements SyncerInterface
                 } catch (\Exception $e) {
                     // Hold the order rather than failing again at every run. A failed refund may have changed the
                     // order in memory: hold a fresh copy of it.
-                    $this->marketplaceOrderManager->logOrderError(
-                        $marketplaceOrder,
-                        __('Could not synchronize the imported order:') . "\n" . $e->getMessage(),
-                        (string) $e
-                    );
-
                     $this->holdStoreOrderWithComment(
                         $marketplaceOrder,
                         $this->salesOrderFactory->create()->load($salesOrder->getId()),
@@ -581,7 +598,9 @@ class Syncer implements SyncerInterface
                         . __(
                             'The refunded items could not be refunded automatically (%1): create the credit memo manually.',
                             $e->getMessage()
-                        )
+                        ),
+                        true,
+                        (string) $e
                     );
 
                     return;
@@ -611,7 +630,8 @@ class Syncer implements SyncerInterface
             . __(
                 'The refunded items could not be refunded automatically (%1): create the credit memo manually.',
                 $failureReason
-            )
+            ),
+            true
         );
     }
 

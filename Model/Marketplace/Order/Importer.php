@@ -92,11 +92,6 @@ class Importer
     private $transactionFactory;
 
     /**
-     * @var Manager
-     */
-    private $orderManager;
-
-    /**
      * @var OrderResource
      */
     private $orderResource;
@@ -119,7 +114,6 @@ class Importer
      * @param ItemRepositoryInterface $itemRepository
      * @param ItemCollectionFactory $itemCollectionFactory
      * @param TransactionFactory $transactionFactory
-     * @param Manager|null $orderManager
      * @param OrderResource|null $orderResource
      * @param MarketplaceItemStateResolver|null $marketplaceItemStateResolver
      */
@@ -136,7 +130,6 @@ class Importer
         ItemRepositoryInterface $itemRepository,
         ItemCollectionFactory $itemCollectionFactory,
         TransactionFactory $transactionFactory,
-        ?Manager $orderManager = null,
         ?OrderResource $orderResource = null,
         ?MarketplaceItemStateResolver $marketplaceItemStateResolver = null
     ) {
@@ -152,7 +145,6 @@ class Importer
         $this->itemRepository = $itemRepository;
         $this->itemCollectionFactory = $itemCollectionFactory;
         $this->transactionFactory = $transactionFactory;
-        $this->orderManager = $orderManager ?? ObjectManager::getInstance()->get(Manager::class);
         $this->orderResource = $orderResource ?? ObjectManager::getInstance()->get(OrderResource::class);
 
         $this->marketplaceItemStateResolver = $marketplaceItemStateResolver
@@ -688,19 +680,6 @@ class Importer
         );
 
         $transaction->save();
-
-        if ($isImported && $itemComparison['has_shape_changed']) {
-            // How Shopping Feed splits or merges items is not documented: keep a trace of each case.
-            try {
-                $this->orderManager->logOrderInfo(
-                    $marketplaceOrder,
-                    __('The items of the order have changed on the marketplace.'),
-                    $this->getItemComparisonDetails($itemComparison)
-                );
-            } catch (\Exception $e) {
-                $this->logger->error($e);
-            }
-        }
     }
 
     /**
@@ -760,16 +739,6 @@ class Importer
         $unmatchedStoredItems = $storedItems;
         $syncingChanges = 0;
         $hasShapeChanged = false;
-        $storedItemsData = [];
-
-        foreach ($storedItems as $storedItem) {
-            $storedItemsData[] = [
-                'id' => $storedItem->getShoppingFeedItemId(),
-                'reference' => $storedItem->getReference(),
-                'quantity' => $storedItem->getQuantity(),
-                'status' => $storedItem->getShoppingFeedStatus(),
-            ];
-        }
 
         foreach ($apiOrder->getItems() as $apiItem) {
             $storedItem = $this->extractMatchingStoredItem(
@@ -815,32 +784,10 @@ class Importer
 
         return [
             'matches' => $matches,
-            'stored_items_data' => $storedItemsData,
             'unmatched_stored_items' => $unmatchedStoredItems,
             'is_first_refresh' => $isFirstRefresh,
             'syncing_changes' => $syncingChanges,
             'has_shape_changed' => $hasShapeChanged,
         ];
-    }
-
-    /**
-     * @param array $itemComparison
-     * @return string
-     */
-    private function getItemComparisonDetails(array $itemComparison)
-    {
-        $before = $itemComparison['stored_items_data'];
-        $after = [];
-
-        foreach ($itemComparison['matches'] as list($apiItem)) {
-            $after[] = [
-                'id' => $apiItem->getId(),
-                'reference' => $apiItem->getReference(),
-                'quantity' => $apiItem->getQuantity(),
-                'status' => $this->getApiItemStatus($apiItem),
-            ];
-        }
-
-        return (string) json_encode([ 'before' => $before, 'after' => $after ], JSON_PRETTY_PRINT);
     }
 }

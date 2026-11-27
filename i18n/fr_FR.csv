@@ -632,7 +632,6 @@
 "The invoice PDF will be uploaded to compatible marketplaces only (see list here: https://developer.shopping-feed.com/api/fae0997e4f525-store-order-api#specific-order-operations).","Les PDF de factures seront uniquement uploadés pour les places de marché compatibles (voir la liste ici : https://developer.shopping-feed.com/api/fae0997e4f525-store-order-api#specific-order-operations)."
 "The item references will be considered to correspond to product IDs.","Les références d'articles seront considérées comme correspondant aux IDs produits."
 "The item references will be considered to correspond to product SKUs.","Les références d'articles seront considérées comme correspondant aux SKUs produits."
-"The items of the order have changed on the marketplace.","Les articles de la commande ont changé sur la place de marché."
 "The last name entered in the billing address.","Le nom renseigné dans l'adresse de facturation."
 "The marketplace order has no billing address.","La commande place de marché n'a pas d'adresse de facturation."
 "The marketplace order has no item.","La commande place de marché ne contient pas d'articles."
